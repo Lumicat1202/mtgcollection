@@ -92,3 +92,25 @@ export async function POST(request: Request) {
   }
   return NextResponse.json({ message: `Added ${qty} ${card.name} to ${boxName}` });
 }
+
+export async function GET() {
+  // Supabase sends at most 1000 rows at a time, so fetch in pages
+  const pageSize = 1000;
+  const allCards: Record<string, unknown>[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from("cards")
+      .select("*")
+      .order("name")
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    allCards.push(...data);
+    if (data.length < pageSize) break;
+  }
+
+  return NextResponse.json({ cards: allCards });
+}
