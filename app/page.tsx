@@ -11,6 +11,9 @@ export default function Home() {
         <Link href="/collection" className="rounded border border-gray-400 px-4 py-3 hover:bg-gray-500/10">
           📚 View collection
         </Link>
+        <Link href="/import" className="rounded border border-gray-400 px-4 py-3 hover:bg-gray-500/10">
+          📥 Import from ManaBox
+        </Link>
       </div>
     </main>
   );
