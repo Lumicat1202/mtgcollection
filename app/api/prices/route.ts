@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { getUserAndClient } from "@/lib/supabase-server";
 
 // Refreshing a big collection can take a little while
 export const maxDuration = 300;
@@ -21,12 +21,16 @@ type Row = {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function POST() {
+  const { supabase, user } = await getUserAndClient();
+  if (!user) return NextResponse.json({ error: "Please log in" }, { status: 401 });
+
   // 1. Load every card you own
   const rows: Row[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase
       .from("cards")
       .select("*")
+      .eq("user_id", user.id)
       .order("id")
       .range(from, from + 999);
 

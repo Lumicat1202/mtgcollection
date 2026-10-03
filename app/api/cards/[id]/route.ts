@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { getUserAndClient } from "@/lib/supabase-server";
 
 type Params = { params: Promise<{ id: string }> };
 
 // Change quantity, or move copies to another box
 export async function PATCH(request: Request, { params }: Params) {
+  const { supabase, user } = await getUserAndClient();
+  if (!user) return NextResponse.json({ error: "Please log in" }, { status: 401 });
+
   const { id } = await params;
   const body = await request.json();
 
@@ -12,6 +15,7 @@ export async function PATCH(request: Request, { params }: Params) {
     .from("cards")
     .select("*")
     .eq("id", id)
+    .eq("user_id", user.id)
     .maybeSingle();
 
   if (findError) return NextResponse.json({ error: findError.message }, { status: 500 });
@@ -30,6 +34,7 @@ export async function PATCH(request: Request, { params }: Params) {
     const { data: target, error: targetError } = await supabase
       .from("cards")
       .select("id, quantity")
+      .eq("user_id", user.id)
       .eq("scryfall_id", card.scryfall_id)
       .eq("foil", card.foil)
       .eq("box", toBox)
@@ -38,14 +43,12 @@ export async function PATCH(request: Request, { params }: Params) {
     if (targetError) return NextResponse.json({ error: targetError.message }, { status: 500 });
 
     if (target) {
-      // Yes: add to its quantity
       const { error } = await supabase
         .from("cards")
         .update({ quantity: target.quantity + count })
         .eq("id", target.id);
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     } else {
-      // No: make a new row for that box with the same card info
       const copy = { ...card, box: toBox, quantity: count };
       delete copy.id;
       delete copy.added_at;
@@ -91,8 +94,11 @@ export async function PATCH(request: Request, { params }: Params) {
 
 // Remove the card from your collection entirely
 export async function DELETE(_request: Request, { params }: Params) {
+  const { supabase, user } = await getUserAndClient();
+  if (!user) return NextResponse.json({ error: "Please log in" }, { status: 401 });
+
   const { id } = await params;
-  const { error } = await supabase.from("cards").delete().eq("id", id);
+  const { error } = await supabase.from("cards").delete().eq("id", id).eq("user_id", user.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ deleted: true });
 }

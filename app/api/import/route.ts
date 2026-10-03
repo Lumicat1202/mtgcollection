@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { getUserAndClient } from "@/lib/supabase-server";
 
 // Cards worth this much or more get flagged after an import
 const VALUABLE_PRICE = 5;
@@ -45,6 +45,9 @@ type ValuableCard = {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function POST(request: Request) {
+  const { supabase, user } = await getUserAndClient();
+  if (!user) return NextResponse.json({ error: "Please log in" }, { status: 401 });
+
   const { box, rows } = (await request.json()) as { box?: string; rows?: ImportRow[] };
   const boxName = String(box || "").trim() || "Unsorted";
 
@@ -79,7 +82,7 @@ export async function POST(request: Request) {
     }
     const data = await res.json();
     for (const card of data.data as ScryfallCard[]) cardsById.set(card.id, card);
-    await sleep(100); // be polite to Scryfall's servers
+    await sleep(100);
   }
 
   // 3. Find how many of each you already have in this box
@@ -88,6 +91,7 @@ export async function POST(request: Request) {
     const { data, error } = await supabase
       .from("cards")
       .select("scryfall_id, foil, quantity")
+      .eq("user_id", user.id)
       .eq("box", boxName)
       .in("scryfall_id", uniqueIds.slice(i, i + 100));
 
@@ -128,6 +132,7 @@ export async function POST(request: Request) {
     }
 
     toSave.push({
+      user_id: user.id,
       scryfall_id: card.id,
       name: card.name,
       set_code: card.set,
@@ -150,7 +155,7 @@ export async function POST(request: Request) {
   for (let i = 0; i < toSave.length; i += 500) {
     const { error } = await supabase
       .from("cards")
-      .upsert(toSave.slice(i, i + 500), { onConflict: "scryfall_id,foil,box" });
+      .upsert(toSave.slice(i, i + 500), { onConflict: "user_id,scryfall_id,foil,box" });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }
 

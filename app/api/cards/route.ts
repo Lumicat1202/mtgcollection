@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { getUserAndClient } from "@/lib/supabase-server";
 
 const SCRYFALL_HEADERS = {
   "User-Agent": "MTGCollection/1.0",
@@ -12,7 +12,11 @@ type ScryfallFace = {
   image_uris?: { normal?: string };
 };
 
+// Add one card
 export async function POST(request: Request) {
+  const { supabase, user } = await getUserAndClient();
+  if (!user) return NextResponse.json({ error: "Please log in" }, { status: 401 });
+
   const { name, box, quantity, foil } = await request.json();
 
   if (!name || typeof name !== "string") {
@@ -25,10 +29,7 @@ export async function POST(request: Request) {
     { headers: SCRYFALL_HEADERS }
   );
   if (!res.ok) {
-    return NextResponse.json(
-      { error: `Couldn't find "${name}" on Scryfall` },
-      { status: 404 }
-    );
+    return NextResponse.json({ error: `Couldn't find "${name}" on Scryfall` }, { status: 404 });
   }
   const card = await res.json();
   const faces: ScryfallFace[] = card.card_faces ?? [];
@@ -42,26 +43,19 @@ export async function POST(request: Request) {
   const { data: existing, error: findError } = await supabase
     .from("cards")
     .select("id, quantity")
+    .eq("user_id", user.id)
     .eq("scryfall_id", card.id)
     .eq("foil", isFoil)
     .eq("box", boxName)
     .maybeSingle();
 
-  if (findError) {
-    return NextResponse.json({ error: findError.message }, { status: 500 });
-  }
+  if (findError) return NextResponse.json({ error: findError.message }, { status: 500 });
 
   // 3a. Already have it: just bump the quantity
   if (existing) {
     const newQty = existing.quantity + qty;
-    const { error } = await supabase
-      .from("cards")
-      .update({ quantity: newQty })
-      .eq("id", existing.id);
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    const { error } = await supabase.from("cards").update({ quantity: newQty }).eq("id", existing.id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({
       message: `Added ${qty} more ${card.name} to ${boxName} (you now have ${newQty} there)`,
     });
@@ -69,6 +63,7 @@ export async function POST(request: Request) {
 
   // 3b. New card: save it with its info from Scryfall
   const { error } = await supabase.from("cards").insert({
+    user_id: user.id,
     scryfall_id: card.id,
     name: card.name,
     set_code: card.set,
@@ -80,21 +75,21 @@ export async function POST(request: Request) {
     color_identity: card.color_identity ?? [],
     type_line: card.type_line,
     mana_value: card.cmc,
-    oracle_text:
-      card.oracle_text ?? faces.map((f) => f.oracle_text ?? "").join("\n//\n"),
+    oracle_text: card.oracle_text ?? faces.map((f) => f.oracle_text ?? "").join("\n//\n"),
     rarity: card.rarity,
     image_url: card.image_uris?.normal ?? firstFace?.image_uris?.normal ?? null,
     price_usd: isFoil ? card.prices?.usd_foil : card.prices?.usd,
   });
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ message: `Added ${qty} ${card.name} to ${boxName}` });
 }
 
+// List all of your cards
 export async function GET() {
-  // Supabase sends at most 1000 rows at a time, so fetch in pages
+  const { supabase, user } = await getUserAndClient();
+  if (!user) return NextResponse.json({ error: "Please log in" }, { status: 401 });
+
   const pageSize = 1000;
   const allCards: Record<string, unknown>[] = [];
 
@@ -102,12 +97,11 @@ export async function GET() {
     const { data, error } = await supabase
       .from("cards")
       .select("*")
+      .eq("user_id", user.id)
       .order("name")
       .range(from, from + pageSize - 1);
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     allCards.push(...data);
     if (data.length < pageSize) break;
   }
