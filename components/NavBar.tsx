@@ -10,6 +10,7 @@ const links = [
   { href: "/add", label: "Add" },
   { href: "/import", label: "Import" },
   { href: "/collection", label: "Collection" },
+  { href: "/deck", label: "Deck Builder" },
 ];
 
 export default function NavBar() {
