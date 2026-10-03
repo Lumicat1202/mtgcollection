@@ -46,6 +46,13 @@ function typeGroup(card: Card) {
   return TYPE_ORDER.find((t) => frontFace.includes(t)) ?? "Other";
 }
 
+async function fetchCards(): Promise<Card[]> {
+  const res = await fetch("/api/cards");
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data.cards;
+}
+
 export default function CollectionPage() {
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,13 +63,15 @@ export default function CollectionPage() {
   const [view, setView] = useState<"grid" | "list">("grid");
   const [selected, setSelected] = useState<Card | null>(null);
 
+  // Manage panel
+  const [busy, setBusy] = useState(false);
+  const [manageMsg, setManageMsg] = useState<string | null>(null);
+  const [moveBox, setMoveBox] = useState("");
+  const [moveCount, setMoveCount] = useState(1);
+
   useEffect(() => {
-    fetch("/api/cards")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.error) throw new Error(data.error);
-        setCards(data.cards);
-      })
+    fetchCards()
+      .then(setCards)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -119,6 +128,78 @@ export default function CollectionPage() {
       else next.add(color);
       return next;
     });
+  }
+
+  function openCard(card: Card) {
+    setSelected(card);
+    setManageMsg(null);
+    setMoveBox("");
+    setMoveCount(1);
+  }
+
+  async function changeQuantity(card: Card, newQty: number) {
+    if (newQty < 1) return deleteCard(card);
+    setBusy(true);
+    setManageMsg(null);
+    try {
+      const res = await fetch(`/api/cards/${card.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quantity: newQty }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Update failed");
+      setCards((prev) => prev.map((c) => (c.id === card.id ? data.card : c)));
+      setSelected(data.card);
+    } catch (err) {
+      setManageMsg(err instanceof Error ? err.message : "Update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function moveCard(card: Card) {
+    setBusy(true);
+    setManageMsg(null);
+    try {
+      const res = await fetch(`/api/cards/${card.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ move: { toBox: moveBox, count: moveCount } }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Move failed");
+
+      const fresh = await fetchCards();
+      setCards(fresh);
+      const stillHere = fresh.find((c) => c.id === card.id) ?? null;
+      setSelected(stillHere);
+      setManageMsg(`Moved ${data.moved} to ${data.toBox}`);
+      setMoveBox("");
+      setMoveCount(1);
+    } catch (err) {
+      setManageMsg(err instanceof Error ? err.message : "Move failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteCard(card: Card) {
+    const copies = card.quantity === 1 ? "" : `all ${card.quantity} copies of `;
+    if (!confirm(`Delete ${copies}${card.name} from ${card.box}?`)) return;
+    setBusy(true);
+    setManageMsg(null);
+    try {
+      const res = await fetch(`/api/cards/${card.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Delete failed");
+      setCards((prev) => prev.filter((c) => c.id !== card.id));
+      setSelected(null);
+    } catch (err) {
+      setManageMsg(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (loading) return <p className="p-6">Loading your collection...</p>;
@@ -184,11 +265,7 @@ export default function CollectionPage() {
                   {view === "grid" ? (
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
                       {types[type].map((card) => (
-                        <button
-                          key={card.id}
-                          onClick={() => setSelected(card)}
-                          className="group text-left"
-                        >
+                        <button key={card.id} onClick={() => openCard(card)} className="group text-left">
                           <div className="relative">
                             {card.image_url ? (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -224,7 +301,7 @@ export default function CollectionPage() {
                         {types[type].map((card) => (
                           <tr
                             key={card.id}
-                            onClick={() => setSelected(card)}
+                            onClick={() => openCard(card)}
                             className="cursor-pointer border-b border-gray-700/30 hover:bg-gray-500/10"
                           >
                             <td className="w-10 py-1">{card.quantity}x</td>
@@ -263,11 +340,7 @@ export default function CollectionPage() {
             <div className="flex flex-col gap-5 sm:flex-row">
               {selected.image_url && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={selected.image_url}
-                  alt={selected.name}
-                  className="w-full rounded-xl sm:w-72"
-                />
+                <img src={selected.image_url} alt={selected.name} className="w-full self-start rounded-xl sm:w-72" />
               )}
               <div className="flex-1">
                 <div className="flex items-start justify-between gap-4">
@@ -291,11 +364,6 @@ export default function CollectionPage() {
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                   <dt className="text-gray-500">Box</dt>
                   <dd>{selected.box}</dd>
-                  <dt className="text-gray-500">You own</dt>
-                  <dd>
-                    {selected.quantity}
-                    {selected.foil ? " (foil)" : ""}
-                  </dd>
                   <dt className="text-gray-500">Mana value</dt>
                   <dd>{selected.mana_value ?? 0}</dd>
                   <dt className="text-gray-500">Set</dt>
@@ -307,8 +375,77 @@ export default function CollectionPage() {
                   <dt className="text-gray-500">Price</dt>
                   <dd>
                     {selected.price_usd != null ? `$${Number(selected.price_usd).toFixed(2)}` : "—"}
+                    {selected.foil ? " (foil)" : ""}
                   </dd>
                 </dl>
+
+                {/* Manage */}
+                <div className="mt-5 border-t border-gray-500/30 pt-4">
+                  <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">Manage</h3>
+
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="w-20 text-sm text-gray-500">Quantity</span>
+                    <button
+                      disabled={busy}
+                      onClick={() => changeQuantity(selected, selected.quantity - 1)}
+                      className="h-8 w-8 rounded border border-gray-400 text-lg hover:bg-gray-500/10 disabled:opacity-50"
+                    >
+                      −
+                    </button>
+                    <span className="w-8 text-center text-lg font-semibold">{selected.quantity}</span>
+                    <button
+                      disabled={busy}
+                      onClick={() => changeQuantity(selected, selected.quantity + 1)}
+                      className="h-8 w-8 rounded border border-gray-400 text-lg hover:bg-gray-500/10 disabled:opacity-50"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <span className="w-20 text-sm text-gray-500">Move</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={selected.quantity}
+                      value={moveCount}
+                      onChange={(e) => setMoveCount(Number(e.target.value))}
+                      className="w-16 rounded border border-gray-400 bg-transparent px-2 py-1.5 text-sm"
+                    />
+                    <span className="text-sm">to</span>
+                    <input
+                      list="box-options"
+                      value={moveBox}
+                      onChange={(e) => setMoveBox(e.target.value)}
+                      placeholder="Box name"
+                      className="min-w-0 flex-1 rounded border border-gray-400 bg-transparent px-2 py-1.5 text-sm"
+                    />
+                    <datalist id="box-options">
+                      {boxes
+                        .filter((b) => b !== "All boxes" && b !== selected.box)
+                        .map((b) => (
+                          <option key={b} value={b} />
+                        ))}
+                    </datalist>
+                    <button
+                      disabled={busy || !moveBox.trim() || moveBox.trim() === selected.box}
+                      onClick={() => moveCard(selected)}
+                      className="rounded bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      Move
+                    </button>
+                  </div>
+
+                  <button
+                    disabled={busy}
+                    onClick={() => deleteCard(selected)}
+                    className="rounded border border-red-500 px-3 py-1.5 text-sm text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+                  >
+                    🗑️ Delete from collection
+                  </button>
+
+                  {manageMsg && <p className="mt-3 text-sm text-gray-500">{manageMsg}</p>}
+                </div>
               </div>
             </div>
           </div>
