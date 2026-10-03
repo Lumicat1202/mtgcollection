@@ -4,6 +4,9 @@ import { getUserAndClient } from "@/lib/supabase-server";
 // Cards worth this much or more get flagged after an import
 const VALUABLE_PRICE = 5;
 
+// What a valid Scryfall ID looks like
+const SCRYFALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 const SCRYFALL_HEADERS = {
   "User-Agent": "MTGCollection/1.0",
   Accept: "application/json",
@@ -44,6 +47,30 @@ type ValuableCard = {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Ask Scryfall for up to 75 cards, retrying if it says it's busy
+async function fetchFromScryfall(ids: string[]): Promise<ScryfallCard[]> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch("https://api.scryfall.com/cards/collection", {
+      method: "POST",
+      headers: SCRYFALL_HEADERS,
+      body: JSON.stringify({ identifiers: ids.map((id) => ({ id })) }),
+    });
+
+    if (res.status === 429) {
+      await sleep(1000 * attempt); // too many requests: wait, then try again
+      continue;
+    }
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const details = data?.details ? `: ${data.details}` : "";
+      throw new Error(`Scryfall request failed (${res.status})${details}`);
+    }
+    return (data?.data ?? []) as ScryfallCard[];
+  }
+  throw new Error("Scryfall is busy right now. Wait a minute and try again.");
+}
+
 export async function POST(request: Request) {
   const { supabase, user } = await getUserAndClient();
   if (!user) return NextResponse.json({ error: "Please log in" }, { status: 401 });
@@ -55,34 +82,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No cards to import" }, { status: 400 });
   }
 
-  // 1. Combine duplicate rows (same printing + same foil)
+  // 1. Clean up IDs, skip malformed ones, and combine duplicate rows
+  const notFound: string[] = [];
   const combined = new Map<string, ImportRow>();
   for (const row of rows) {
-    if (!row.scryfall_id) continue;
-    const key = `${row.scryfall_id}|${Boolean(row.foil)}`;
+    const id = String(row.scryfall_id ?? "").trim().toLowerCase();
+    if (!SCRYFALL_ID.test(id)) {
+      notFound.push(id || "(blank)");
+      continue;
+    }
+    const key = `${id}|${Boolean(row.foil)}`;
     const qty = Math.max(1, Number(row.quantity) || 1);
     const existing = combined.get(key);
     if (existing) existing.quantity += qty;
-    else combined.set(key, { scryfall_id: row.scryfall_id, foil: Boolean(row.foil), quantity: qty });
+    else combined.set(key, { scryfall_id: id, foil: Boolean(row.foil), quantity: qty });
   }
   const items = Array.from(combined.values());
   const uniqueIds = Array.from(new Set(items.map((i) => i.scryfall_id)));
 
+  if (items.length === 0) {
+    return NextResponse.json({ error: "None of the rows had a valid Scryfall ID" }, { status: 400 });
+  }
+
   // 2. Get card details from Scryfall, 75 cards per request (their limit)
   const cardsById = new Map<string, ScryfallCard>();
-  for (let i = 0; i < uniqueIds.length; i += 75) {
-    const chunk = uniqueIds.slice(i, i + 75);
-    const res = await fetch("https://api.scryfall.com/cards/collection", {
-      method: "POST",
-      headers: SCRYFALL_HEADERS,
-      body: JSON.stringify({ identifiers: chunk.map((id) => ({ id })) }),
-    });
-    if (!res.ok) {
-      return NextResponse.json({ error: `Scryfall request failed (${res.status})` }, { status: 502 });
+  try {
+    for (let i = 0; i < uniqueIds.length; i += 75) {
+      const cards = await fetchFromScryfall(uniqueIds.slice(i, i + 75));
+      for (const card of cards) cardsById.set(card.id, card);
+      await sleep(100); // be polite to Scryfall's servers
     }
-    const data = await res.json();
-    for (const card of data.data as ScryfallCard[]) cardsById.set(card.id, card);
-    await sleep(100);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Scryfall request failed";
+    return NextResponse.json({ error: msg }, { status: 502 });
   }
 
   // 3. Find how many of each you already have in this box
@@ -100,7 +132,6 @@ export async function POST(request: Request) {
   }
 
   // 4. Build the rows to save, and note any valuable cards
-  const notFound: string[] = [];
   const valuable: ValuableCard[] = [];
   const toSave = [];
   let importedCopies = 0;
