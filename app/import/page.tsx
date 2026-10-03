@@ -11,18 +11,33 @@ type PreviewRow = {
   scryfall_id: string;
 };
 
+type ValuableCard = {
+  name: string;
+  price: number;
+  foil: boolean;
+  quantity: number;
+  image: string | null;
+};
+
+function money(amount: number) {
+  return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
 export default function ImportPage() {
   const [rows, setRows] = useState<PreviewRow[]>([]);
   const [fileName, setFileName] = useState("");
   const [box, setBox] = useState("");
   const [importing, setImporting] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [valuable, setValuable] = useState<ValuableCard[] | null>(null);
+  const [threshold, setThreshold] = useState(5);
 
   function handleFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
     setStatus(null);
+    setValuable(null);
 
     Papa.parse<Record<string, string>>(file, {
       header: true,
@@ -49,6 +64,7 @@ export default function ImportPage() {
   async function handleImport() {
     setImporting(true);
     setStatus(null);
+    setValuable(null);
     try {
       const res = await fetch("/api/import", {
         method: "POST",
@@ -64,6 +80,8 @@ export default function ImportPage() {
       let text = data.message;
       if (data.notFound?.length) text += ` (${data.notFound.length} couldn't be found on Scryfall)`;
       setStatus({ type: "success", text });
+      setValuable(data.valuable ?? []);
+      setThreshold(data.valuableThreshold ?? 5);
       setRows([]);
       setFileName("");
     } catch (err) {
@@ -76,7 +94,7 @@ export default function ImportPage() {
   const totalCopies = rows.reduce((sum, r) => sum + r.quantity, 0);
 
   return (
-    <main className="mx-auto max-w-2xl p-6">
+    <main className="mx-auto w-full max-w-2xl p-6">
       <h1 className="mb-2 text-2xl font-bold">Import from ManaBox</h1>
       <p className="mb-6 text-sm text-gray-500">
         Export a CSV from ManaBox, pick it below, choose a box, and import.
@@ -138,6 +156,37 @@ export default function ImportPage() {
         <p className={`mt-4 text-sm ${status.type === "success" ? "text-green-500" : "text-red-500"}`}>
           {status.text}
         </p>
+      )}
+
+      {/* Valuable cards alert */}
+      {valuable && valuable.length > 0 && (
+        <div className="mt-6 rounded-lg border-2 border-yellow-400 bg-yellow-400/10 p-4">
+          <h2 className="mb-1 text-lg font-bold">💰 Valuable cards found!</h2>
+          <p className="mb-3 text-sm text-gray-500">
+            {valuable.length} card{valuable.length === 1 ? "" : "s"} worth {money(threshold)} or more in this batch.
+            You may want to pull these out of the box and sleeve them.
+          </p>
+          <ul className="space-y-2">
+            {valuable.map((card, i) => (
+              <li key={`${card.name}-${card.foil}-${i}`} className="flex items-center gap-3">
+                {card.image && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={card.image} alt={card.name} className="w-12 rounded" />
+                )}
+                <span className="flex-1">
+                  {card.quantity > 1 && <span className="text-gray-500">{card.quantity}x </span>}
+                  {card.name}
+                  {card.foil && <span className="ml-2 text-xs text-amber-400">foil</span>}
+                </span>
+                <span className="font-bold text-green-500">{money(card.price)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {valuable && valuable.length === 0 && (
+        <p className="mt-4 text-sm text-gray-500">No cards worth {money(threshold)} or more in this batch.</p>
       )}
     </main>
   );

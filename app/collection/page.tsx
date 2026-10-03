@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+// Cards worth this much or more get the gold $$ badge
+const VALUABLE_PRICE = 5;
+
 type Card = {
   id: string;
   name: string;
@@ -52,8 +55,18 @@ function priceOf(card: Card) {
   return card.price_usd != null ? Number(card.price_usd) : 0;
 }
 
+function isValuable(card: Card) {
+  return priceOf(card) >= VALUABLE_PRICE;
+}
+
 function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+function ValueBadge() {
+  return (
+    <span className="rounded-full bg-yellow-400 px-2 py-0.5 text-xs font-extrabold text-black shadow">$$</span>
+  );
 }
 
 async function fetchCards(): Promise<Card[]> {
@@ -280,13 +293,16 @@ export default function CollectionPage() {
               <li key={card.id}>
                 <button
                   onClick={() => openCard(card)}
-                  className="flex w-full justify-between gap-2 border-b border-gray-700/30 py-1 text-left hover:bg-gray-500/10"
+                  className="flex w-full items-center justify-between gap-2 border-b border-gray-700/30 py-1 text-left hover:bg-gray-500/10"
                 >
                   <span className="truncate">
                     <span className="text-gray-500">{i + 1}.</span> {card.name}
                     {card.foil && <span className="ml-1 text-xs text-amber-400">foil</span>}
                   </span>
-                  <span className="whitespace-nowrap font-semibold text-green-500">{money(priceOf(card))}</span>
+                  <span className="flex items-center gap-2 whitespace-nowrap font-semibold text-green-500">
+                    {isValuable(card) && <ValueBadge />}
+                    {money(priceOf(card))}
+                  </span>
                 </button>
               </li>
             ))}
@@ -369,12 +385,23 @@ export default function CollectionPage() {
                                 src={card.image_url}
                                 alt={card.name}
                                 loading="lazy"
-                                className="w-full rounded-lg shadow transition group-hover:scale-[1.03]"
+                                className={`w-full rounded-lg shadow transition group-hover:scale-[1.03] ${
+                                  isValuable(card) ? "ring-4 ring-yellow-400" : ""
+                                }`}
                               />
                             ) : (
-                              <div className="flex aspect-[488/680] items-center justify-center rounded-lg border border-gray-400 p-2 text-center text-sm">
+                              <div
+                                className={`flex aspect-[488/680] items-center justify-center rounded-lg border p-2 text-center text-sm ${
+                                  isValuable(card) ? "border-yellow-400 ring-4 ring-yellow-400" : "border-gray-400"
+                                }`}
+                              >
                                 {card.name}
                               </div>
+                            )}
+                            {isValuable(card) && (
+                              <span className="absolute right-2 top-2">
+                                <ValueBadge />
+                              </span>
                             )}
                             {card.quantity > 1 && (
                               <span className="absolute bottom-2 right-2 rounded-full bg-black/80 px-2 py-0.5 text-xs font-bold text-white">
@@ -389,7 +416,11 @@ export default function CollectionPage() {
                           </div>
                           <p className="mt-1 flex justify-between gap-2 text-xs">
                             <span className="truncate text-gray-500">{card.box}</span>
-                            <span className="whitespace-nowrap font-semibold text-green-500">
+                            <span
+                              className={`whitespace-nowrap font-semibold ${
+                                isValuable(card) ? "text-yellow-500" : "text-green-500"
+                              }`}
+                            >
                               {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
                             </span>
                           </p>
@@ -403,16 +434,27 @@ export default function CollectionPage() {
                           <tr
                             key={card.id}
                             onClick={() => openCard(card)}
-                            className="cursor-pointer border-b border-gray-700/30 hover:bg-gray-500/10"
+                            className={`cursor-pointer border-b border-gray-700/30 hover:bg-gray-500/10 ${
+                              isValuable(card) ? "bg-yellow-400/10" : ""
+                            }`}
                           >
                             <td className="w-10 py-1">{card.quantity}x</td>
                             <td className="truncate py-1 pr-3">
                               {card.name}
                               {card.foil && <span className="ml-2 text-xs text-amber-400">foil</span>}
+                              {isValuable(card) && (
+                                <span className="ml-2">
+                                  <ValueBadge />
+                                </span>
+                              )}
                             </td>
                             <td className="w-16 whitespace-nowrap py-1 text-gray-500">MV {card.mana_value ?? 0}</td>
                             <td className="w-14 py-1 uppercase text-gray-500">{card.set_code}</td>
-                            <td className="w-20 whitespace-nowrap py-1 pr-3 text-right text-green-500">
+                            <td
+                              className={`w-20 whitespace-nowrap py-1 pr-3 text-right ${
+                                isValuable(card) ? "font-bold text-yellow-500" : "text-green-500"
+                              }`}
+                            >
                               {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
                             </td>
                             <td className="w-32 truncate py-1 text-right text-gray-500">{card.box}</td>
@@ -444,11 +486,20 @@ export default function CollectionPage() {
             <div className="flex flex-col gap-5 sm:flex-row">
               {selected.image_url && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={selected.image_url} alt={selected.name} className="w-full self-start rounded-xl sm:w-72" />
+                <img
+                  src={selected.image_url}
+                  alt={selected.name}
+                  className={`w-full self-start rounded-xl sm:w-72 ${
+                    isValuable(selected) ? "ring-4 ring-yellow-400" : ""
+                  }`}
+                />
               )}
               <div className="flex-1">
                 <div className="flex items-start justify-between gap-4">
-                  <h2 className="text-2xl font-bold">{selected.name}</h2>
+                  <h2 className="flex flex-wrap items-center gap-2 text-2xl font-bold">
+                    {selected.name}
+                    {isValuable(selected) && <ValueBadge />}
+                  </h2>
                   <button
                     onClick={() => setSelected(null)}
                     aria-label="Close"

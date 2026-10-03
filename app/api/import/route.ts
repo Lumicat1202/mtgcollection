@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
+// Cards worth this much or more get flagged after an import
+const VALUABLE_PRICE = 5;
+
 const SCRYFALL_HEADERS = {
   "User-Agent": "MTGCollection/1.0",
   Accept: "application/json",
@@ -12,7 +15,7 @@ type ImportRow = { scryfall_id: string; quantity: number; foil: boolean };
 type ScryfallFace = {
   oracle_text?: string;
   colors?: string[];
-  image_uris?: { normal?: string };
+  image_uris?: { normal?: string; small?: string };
 };
 
 type ScryfallCard = {
@@ -26,9 +29,17 @@ type ScryfallCard = {
   cmc?: number;
   oracle_text?: string;
   rarity?: string;
-  image_uris?: { normal?: string };
+  image_uris?: { normal?: string; small?: string };
   card_faces?: ScryfallFace[];
   prices?: { usd?: string | null; usd_foil?: string | null; usd_etched?: string | null };
+};
+
+type ValuableCard = {
+  name: string;
+  price: number;
+  foil: boolean;
+  quantity: number;
+  image: string | null;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -84,8 +95,9 @@ export async function POST(request: Request) {
     for (const row of data) existingQty.set(`${row.scryfall_id}|${row.foil}`, row.quantity);
   }
 
-  // 4. Build the rows to save
+  // 4. Build the rows to save, and note any valuable cards
   const notFound: string[] = [];
+  const valuable: ValuableCard[] = [];
   const toSave = [];
   let importedCopies = 0;
 
@@ -99,6 +111,21 @@ export async function POST(request: Request) {
     const firstFace = faces[0];
     const key = `${item.scryfall_id}|${item.foil}`;
     importedCopies += item.quantity;
+
+    const price = item.foil
+      ? card.prices?.usd_foil ?? card.prices?.usd_etched ?? null
+      : card.prices?.usd ?? null;
+    const priceNumber = price === null ? 0 : Number(price);
+
+    if (priceNumber >= VALUABLE_PRICE) {
+      valuable.push({
+        name: card.name,
+        price: priceNumber,
+        foil: item.foil,
+        quantity: item.quantity,
+        image: card.image_uris?.small ?? firstFace?.image_uris?.small ?? null,
+      });
+    }
 
     toSave.push({
       scryfall_id: card.id,
@@ -115,9 +142,7 @@ export async function POST(request: Request) {
       oracle_text: card.oracle_text ?? faces.map((f) => f.oracle_text ?? "").join("\n//\n"),
       rarity: card.rarity ?? null,
       image_url: card.image_uris?.normal ?? firstFace?.image_uris?.normal ?? null,
-      price_usd: item.foil
-        ? card.prices?.usd_foil ?? card.prices?.usd_etched ?? null
-        : card.prices?.usd ?? null,
+      price_usd: price,
     });
   }
 
@@ -129,8 +154,12 @@ export async function POST(request: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  valuable.sort((a, b) => b.price - a.price);
+
   return NextResponse.json({
     message: `Imported ${toSave.length} cards (${importedCopies} copies) into ${boxName}`,
     notFound,
+    valuable,
+    valuableThreshold: VALUABLE_PRICE,
   });
 }
