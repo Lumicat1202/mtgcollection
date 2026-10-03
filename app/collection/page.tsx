@@ -19,6 +19,8 @@ type Card = {
   price_usd: number | null;
 };
 
+type SortBy = "mv" | "price" | "name";
+
 const COLOR_ORDER = ["White", "Blue", "Black", "Red", "Green", "Multicolor", "Colorless", "Lands"];
 const COLOR_NAMES: Record<string, string> = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green" };
 const COLOR_ACCENTS: Record<string, string> = {
@@ -46,6 +48,14 @@ function typeGroup(card: Card) {
   return TYPE_ORDER.find((t) => frontFace.includes(t)) ?? "Other";
 }
 
+function priceOf(card: Card) {
+  return card.price_usd != null ? Number(card.price_usd) : 0;
+}
+
+function money(amount: number) {
+  return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
 async function fetchCards(): Promise<Card[]> {
   const res = await fetch("/api/cards");
   const data = await res.json();
@@ -59,9 +69,14 @@ export default function CollectionPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [boxFilter, setBoxFilter] = useState("All boxes");
+  const [sortBy, setSortBy] = useState<SortBy>("mv");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"grid" | "list">("grid");
   const [selected, setSelected] = useState<Card | null>(null);
+
+  // Prices
+  const [refreshing, setRefreshing] = useState(false);
+  const [priceMsg, setPriceMsg] = useState<string | null>(null);
 
   // Manage panel
   const [busy, setBusy] = useState(false);
@@ -109,17 +124,29 @@ export default function CollectionPage() {
       groups[color][type].push(card);
     }
 
+    const compare = (a: Card, b: Card) => {
+      if (sortBy === "price") return priceOf(b) - priceOf(a) || a.name.localeCompare(b.name);
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      return (a.mana_value ?? 0) - (b.mana_value ?? 0) || a.name.localeCompare(b.name);
+    };
+
     for (const color of Object.values(groups)) {
-      for (const list of Object.values(color)) {
-        list.sort(
-          (a, b) => (a.mana_value ?? 0) - (b.mana_value ?? 0) || a.name.localeCompare(b.name)
-        );
-      }
+      for (const list of Object.values(color)) list.sort(compare);
     }
     return groups;
-  }, [cards, search, boxFilter]);
+  }, [cards, search, boxFilter, sortBy]);
 
   const totalCopies = cards.reduce((sum, c) => sum + c.quantity, 0);
+  const totalValue = cards.reduce((sum, c) => sum + priceOf(c) * c.quantity, 0);
+
+  const mostValuable = useMemo(
+    () =>
+      [...cards]
+        .filter((c) => priceOf(c) > 0)
+        .sort((a, b) => priceOf(b) - priceOf(a))
+        .slice(0, 10),
+    [cards]
+  );
 
   function toggle(color: string) {
     setCollapsed((prev) => {
@@ -135,6 +162,22 @@ export default function CollectionPage() {
     setManageMsg(null);
     setMoveBox("");
     setMoveCount(1);
+  }
+
+  async function refreshPrices() {
+    setRefreshing(true);
+    setPriceMsg(null);
+    try {
+      const res = await fetch("/api/prices", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Price refresh failed");
+      setCards(await fetchCards());
+      setPriceMsg(`Checked ${data.checked} cards, ${data.updated} prices changed.`);
+    } catch (err) {
+      setPriceMsg(err instanceof Error ? err.message : "Price refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   async function changeQuantity(card: Card, newQty: number) {
@@ -172,8 +215,7 @@ export default function CollectionPage() {
 
       const fresh = await fetchCards();
       setCards(fresh);
-      const stillHere = fresh.find((c) => c.id === card.id) ?? null;
-      setSelected(stillHere);
+      setSelected(fresh.find((c) => c.id === card.id) ?? null);
       setManageMsg(`Moved ${data.moved} to ${data.toBox}`);
       setMoveBox("");
       setMoveCount(1);
@@ -207,11 +249,52 @@ export default function CollectionPage() {
 
   return (
     <main className="mx-auto w-full max-w-5xl p-6">
-      <h1 className="text-2xl font-bold">My Collection</h1>
-      <p className="mb-6 text-sm text-gray-500">
-        {cards.length} unique cards, {totalCopies} total copies
-      </p>
+      {/* Header with total value */}
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">My Collection</h1>
+          <p className="text-sm text-gray-500">
+            {cards.length} unique cards · {totalCopies} total copies
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm text-gray-500">Collection value</p>
+          <p className="text-3xl font-bold text-green-500">{money(totalValue)}</p>
+          <button
+            onClick={refreshPrices}
+            disabled={refreshing}
+            className="mt-1 text-sm text-blue-500 hover:underline disabled:opacity-50"
+          >
+            {refreshing ? "Refreshing prices..." : "🔄 Refresh prices"}
+          </button>
+        </div>
+      </div>
+      {priceMsg && <p className="mb-4 text-right text-sm text-gray-500">{priceMsg}</p>}
 
+      {/* Most valuable */}
+      {mostValuable.length > 0 && (
+        <div className="mb-8 rounded-lg border border-gray-400/40 p-4">
+          <h2 className="mb-3 font-semibold">💎 Most valuable</h2>
+          <ol className="grid gap-x-6 text-sm sm:grid-cols-2">
+            {mostValuable.map((card, i) => (
+              <li key={card.id}>
+                <button
+                  onClick={() => openCard(card)}
+                  className="flex w-full justify-between gap-2 border-b border-gray-700/30 py-1 text-left hover:bg-gray-500/10"
+                >
+                  <span className="truncate">
+                    <span className="text-gray-500">{i + 1}.</span> {card.name}
+                    {card.foil && <span className="ml-1 text-xs text-amber-400">foil</span>}
+                  </span>
+                  <span className="whitespace-nowrap font-semibold text-green-500">{money(priceOf(card))}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Controls */}
       <div className="mb-6 flex flex-col gap-3 sm:flex-row">
         <input
           value={search}
@@ -230,6 +313,15 @@ export default function CollectionPage() {
             </option>
           ))}
         </select>
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as SortBy)}
+          className="rounded border border-gray-400 bg-transparent px-3 py-2"
+        >
+          <option value="mv" className="text-black">Sort: Mana value</option>
+          <option value="price" className="text-black">Sort: Price (high to low)</option>
+          <option value="name" className="text-black">Sort: Name</option>
+        </select>
         <div className="flex overflow-hidden rounded border border-gray-400">
           {(["grid", "list"] as const).map((v) => (
             <button
@@ -245,14 +337,18 @@ export default function CollectionPage() {
 
       {COLOR_ORDER.filter((color) => grouped[color]).map((color) => {
         const types = grouped[color];
-        const count = Object.values(types).flat().reduce((sum, c) => sum + c.quantity, 0);
+        const allInColor = Object.values(types).flat();
+        const count = allInColor.reduce((sum, c) => sum + c.quantity, 0);
+        const value = allInColor.reduce((sum, c) => sum + priceOf(c) * c.quantity, 0);
         const isCollapsed = collapsed.has(color);
 
         return (
           <section key={color} className={`mb-8 border-l-4 pl-4 ${COLOR_ACCENTS[color]}`}>
             <button onClick={() => toggle(color)} className="mb-2 text-xl font-semibold">
               {isCollapsed ? "▸" : "▾"} {color}{" "}
-              <span className="text-sm font-normal text-gray-500">({count})</span>
+              <span className="text-sm font-normal text-gray-500">
+                ({count}) · {money(value)}
+              </span>
             </button>
 
             {!isCollapsed &&
@@ -291,7 +387,12 @@ export default function CollectionPage() {
                               </span>
                             )}
                           </div>
-                          <p className="mt-1 truncate text-xs text-gray-500">{card.box}</p>
+                          <p className="mt-1 flex justify-between gap-2 text-xs">
+                            <span className="truncate text-gray-500">{card.box}</span>
+                            <span className="whitespace-nowrap font-semibold text-green-500">
+                              {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
+                            </span>
+                          </p>
                         </button>
                       ))}
                     </div>
@@ -311,7 +412,10 @@ export default function CollectionPage() {
                             </td>
                             <td className="w-16 whitespace-nowrap py-1 text-gray-500">MV {card.mana_value ?? 0}</td>
                             <td className="w-14 py-1 uppercase text-gray-500">{card.set_code}</td>
-                            <td className="w-36 truncate py-1 text-right text-gray-500">{card.box}</td>
+                            <td className="w-20 whitespace-nowrap py-1 pr-3 text-right text-green-500">
+                              {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
+                            </td>
+                            <td className="w-32 truncate py-1 text-right text-gray-500">{card.box}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -372,10 +476,17 @@ export default function CollectionPage() {
                   </dd>
                   <dt className="text-gray-500">Rarity</dt>
                   <dd className="capitalize">{selected.rarity}</dd>
-                  <dt className="text-gray-500">Price</dt>
+                  <dt className="text-gray-500">Price each</dt>
                   <dd>
-                    {selected.price_usd != null ? `$${Number(selected.price_usd).toFixed(2)}` : "—"}
+                    {priceOf(selected) > 0 ? money(priceOf(selected)) : "No price listed"}
                     {selected.foil ? " (foil)" : ""}
+                  </dd>
+                  <dt className="text-gray-500">Total value</dt>
+                  <dd className="font-semibold text-green-500">
+                    {money(priceOf(selected) * selected.quantity)}
+                    {selected.quantity > 1 && (
+                      <span className="font-normal text-gray-500"> ({selected.quantity} copies)</span>
+                    )}
                   </dd>
                 </dl>
 
