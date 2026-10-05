@@ -45,6 +45,18 @@ type ValuableCard = {
   image: string | null;
 };
 
+// What the sorting guide needs to know about each imported card
+type ImportedCard = {
+  key: string;
+  name: string;
+  colors: string[];
+  type_line: string | null;
+  mana_value: number | null;
+  quantity: number;
+  foil: boolean;
+  price: number;
+};
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Ask Scryfall for up to 75 cards, retrying if it says it's busy
@@ -57,7 +69,7 @@ async function fetchFromScryfall(ids: string[]): Promise<ScryfallCard[]> {
     });
 
     if (res.status === 429) {
-      await sleep(1000 * attempt); // too many requests: wait, then try again
+      await sleep(1000 * attempt);
       continue;
     }
 
@@ -110,7 +122,7 @@ export async function POST(request: Request) {
     for (let i = 0; i < uniqueIds.length; i += 75) {
       const cards = await fetchFromScryfall(uniqueIds.slice(i, i + 75));
       for (const card of cards) cardsById.set(card.id, card);
-      await sleep(100); // be polite to Scryfall's servers
+      await sleep(100);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Scryfall request failed";
@@ -131,8 +143,9 @@ export async function POST(request: Request) {
     for (const row of data) existingQty.set(`${row.scryfall_id}|${row.foil}`, row.quantity);
   }
 
-  // 4. Build the rows to save, and note any valuable cards
+  // 4. Build the rows to save, plus the valuable list and the sorting guide list
   const valuable: ValuableCard[] = [];
+  const imported: ImportedCard[] = [];
   const toSave = [];
   let importedCopies = 0;
 
@@ -151,6 +164,7 @@ export async function POST(request: Request) {
       ? card.prices?.usd_foil ?? card.prices?.usd_etched ?? null
       : card.prices?.usd ?? null;
     const priceNumber = price === null ? 0 : Number(price);
+    const colors = card.colors ?? firstFace?.colors ?? [];
 
     if (priceNumber >= VALUABLE_PRICE) {
       valuable.push({
@@ -162,6 +176,17 @@ export async function POST(request: Request) {
       });
     }
 
+    imported.push({
+      key,
+      name: card.name,
+      colors,
+      type_line: card.type_line ?? null,
+      mana_value: card.cmc ?? null,
+      quantity: item.quantity,
+      foil: item.foil,
+      price: priceNumber,
+    });
+
     toSave.push({
       user_id: user.id,
       scryfall_id: card.id,
@@ -171,7 +196,7 @@ export async function POST(request: Request) {
       quantity: (existingQty.get(key) ?? 0) + item.quantity,
       foil: item.foil,
       box: boxName,
-      colors: card.colors ?? firstFace?.colors ?? [],
+      colors,
       color_identity: card.color_identity ?? [],
       type_line: card.type_line ?? null,
       mana_value: card.cmc ?? null,
@@ -197,5 +222,6 @@ export async function POST(request: Request) {
     notFound,
     valuable,
     valuableThreshold: VALUABLE_PRICE,
+    imported,
   });
 }

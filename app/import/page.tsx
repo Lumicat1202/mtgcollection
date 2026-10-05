@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, type ChangeEvent } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import Papa from "papaparse";
+import BoxPicker from "@/components/BoxPicker";
+import SortingGuide, { type GuideCard } from "@/components/SortingGuide";
+import type { Location } from "@/lib/box-layout";
 
 type PreviewRow = {
   name: string;
@@ -19,18 +22,79 @@ type ValuableCard = {
   image: string | null;
 };
 
+type Guide = {
+  boxName: string;
+  cards: GuideCard[];
+  checked: string[];
+  createdAt: string;
+};
+
+// The latest sorting guide is saved on this device so you can file later
+const GUIDE_KEY = "mtg-sorting-guide";
+
 function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+function saveGuide(guide: Guide | null) {
+  try {
+    if (guide) localStorage.setItem(GUIDE_KEY, JSON.stringify(guide));
+    else localStorage.removeItem(GUIDE_KEY);
+  } catch {
+    // Storage can be unavailable (like some private windows); the guide still works until you leave
+  }
 }
 
 export default function ImportPage() {
   const [rows, setRows] = useState<PreviewRow[]>([]);
   const [fileName, setFileName] = useState("");
   const [box, setBox] = useState("");
+  const [locations, setLocations] = useState<Location[]>([]);
   const [importing, setImporting] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [valuable, setValuable] = useState<ValuableCard[] | null>(null);
   const [threshold, setThreshold] = useState(5);
+  const [guide, setGuide] = useState<Guide | null>(null);
+
+  // Bring back the last sorting guide, if there is one
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(GUIDE_KEY);
+      if (saved) setGuide(JSON.parse(saved));
+    } catch {
+      // Ignore a broken or missing saved guide
+    }
+  }, []);
+
+  function updateGuide(change: (g: Guide) => Guide) {
+    setGuide((prev) => {
+      if (!prev) return prev;
+      const next = change(prev);
+      saveGuide(next);
+      return next;
+    });
+  }
+
+  function toggleChecked(key: string) {
+    updateGuide((g) => ({
+      ...g,
+      checked: g.checked.includes(key) ? g.checked.filter((k) => k !== key) : [...g.checked, key],
+    }));
+  }
+
+  function setManyChecked(keys: string[], done: boolean) {
+    updateGuide((g) => ({
+      ...g,
+      checked: done
+        ? Array.from(new Set([...g.checked, ...keys]))
+        : g.checked.filter((k) => !keys.includes(k)),
+    }));
+  }
+
+  function clearGuide() {
+    setGuide(null);
+    saveGuide(null);
+  }
 
   function handleFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -82,6 +146,16 @@ export default function ImportPage() {
       setStatus({ type: "success", text });
       setValuable(data.valuable ?? []);
       setThreshold(data.valuableThreshold ?? 5);
+
+      const newGuide: Guide = {
+        boxName: box.trim(),
+        cards: data.imported ?? [],
+        checked: [],
+        createdAt: new Date().toISOString(),
+      };
+      setGuide(newGuide);
+      saveGuide(newGuide);
+
       setRows([]);
       setFileName("");
     } catch (err) {
@@ -92,22 +166,18 @@ export default function ImportPage() {
   }
 
   const totalCopies = rows.reduce((sum, r) => sum + r.quantity, 0);
+  const guideLocation = guide ? locations.find((l) => l.name === guide.boxName) ?? null : null;
 
   return (
     <main className="mx-auto w-full max-w-2xl p-6">
       <h1 className="mb-2 text-2xl font-bold">Import from ManaBox</h1>
       <p className="mb-6 text-sm text-gray-500">
-        Export a CSV from ManaBox, pick it below, choose a box, and import.
+        Export a CSV from ManaBox, choose where the cards are going, and import.
       </p>
 
       <label className="mb-4 block text-sm">
-        Box name
-        <input
-          value={box}
-          onChange={(e) => setBox(e.target.value)}
-          placeholder="e.g. Black Sorceries"
-          className="mt-1 w-full rounded border border-gray-400 bg-transparent px-3 py-2"
-        />
+        Where are these cards going?
+        <BoxPicker value={box} onChange={setBox} onLocations={setLocations} />
       </label>
 
       <label className="mb-6 block text-sm">
@@ -145,7 +215,7 @@ export default function ImportPage() {
           >
             {importing ? "Importing..." : `Import ${totalCopies} cards into ${box.trim() || "..."}`}
           </button>
-          {!box.trim() && <p className="mt-2 text-sm text-gray-500">Enter a box name to import.</p>}
+          {!box.trim() && <p className="mt-2 text-sm text-gray-500">Choose where these cards are going.</p>}
           <p className="mt-2 text-xs text-gray-500">
             Heads up: importing the same file twice will double the quantities.
           </p>
@@ -163,8 +233,8 @@ export default function ImportPage() {
         <div className="mt-6 rounded-lg border-2 border-yellow-400 bg-yellow-400/10 p-4">
           <h2 className="mb-1 text-lg font-bold">💰 Valuable cards found!</h2>
           <p className="mb-3 text-sm text-gray-500">
-            {valuable.length} card{valuable.length === 1 ? "" : "s"} worth {money(threshold)} or more in this batch.
-            You may want to pull these out of the box and sleeve them.
+            {valuable.length} card{valuable.length === 1 ? "" : "s"} worth {money(threshold)} or more in this
+            batch. You may want to pull these out and sleeve them before filing the rest.
           </p>
           <ul className="space-y-2">
             {valuable.map((card, i) => (
@@ -187,6 +257,20 @@ export default function ImportPage() {
 
       {valuable && valuable.length === 0 && (
         <p className="mt-4 text-sm text-gray-500">No cards worth {money(threshold)} or more in this batch.</p>
+      )}
+
+      {/* Sorting guide */}
+      {guide && (
+        <SortingGuide
+          boxName={guide.boxName}
+          location={guideLocation}
+          cards={guide.cards}
+          checked={guide.checked}
+          valuableThreshold={threshold}
+          onToggle={toggleChecked}
+          onSetMany={setManyChecked}
+          onClear={clearGuide}
+        />
       )}
     </main>
   );
