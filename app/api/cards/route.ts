@@ -38,6 +38,15 @@ export async function POST(request: Request) {
   const boxName = String(box || "").trim() || "Unsorted";
   const qty = Math.max(1, Number(quantity) || 1);
   const isFoil = Boolean(foil);
+  const colors = card.colors ?? firstFace?.colors ?? [];
+
+  // What the page needs to work out where the card goes
+  const placeable = {
+    name: card.name,
+    colors,
+    type_line: card.type_line ?? null,
+    mana_value: card.cmc ?? null,
+  };
 
   // 2. Check if you already have this card in this box
   const { data: existing, error: findError } = await supabase
@@ -57,7 +66,8 @@ export async function POST(request: Request) {
     const { error } = await supabase.from("cards").update({ quantity: newQty }).eq("id", existing.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({
-      message: `Added ${qty} more ${card.name} to ${boxName} (you now have ${newQty} there)`,
+      message: `Added ${qty} more ${card.name} (you now have ${newQty} in ${boxName})`,
+      card: placeable,
     });
   }
 
@@ -71,7 +81,7 @@ export async function POST(request: Request) {
     quantity: qty,
     foil: isFoil,
     box: boxName,
-    colors: card.colors ?? firstFace?.colors ?? [],
+    colors,
     color_identity: card.color_identity ?? [],
     type_line: card.type_line,
     mana_value: card.cmc,
@@ -82,7 +92,7 @@ export async function POST(request: Request) {
   });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ message: `Added ${qty} ${card.name} to ${boxName}` });
+  return NextResponse.json({ message: `Added ${qty} ${card.name} to ${boxName}`, card: placeable });
 }
 
 // List all of your cards

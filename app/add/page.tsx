@@ -1,15 +1,28 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import BoxPicker from "@/components/BoxPicker";
+import {
+  type Location,
+  type PlaceableCard,
+  groupOf,
+  placementLabel,
+  rowFor,
+} from "@/lib/box-layout";
+
+type Status = { type: "success" | "error"; text: string; where?: string };
+type RecentCard = { id: number; text: string; where: string };
 
 export default function AddCardPage() {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [box, setBox] = useState("Box 1");
+  const [box, setBox] = useState("");
+  const [locations, setLocations] = useState<Location[]>([]);
   const [quantity, setQuantity] = useState(1);
   const [foil, setFoil] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [status, setStatus] = useState<Status | null>(null);
+  const [recent, setRecent] = useState<RecentCard[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Only show suggestions once at least 2 letters are typed
@@ -32,8 +45,15 @@ export default function AddCardPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
+  // Where a card goes, like "Main Box · Row 2 · Black · Sorcery"
+  function whereItGoes(card: PlaceableCard) {
+    const boxName = box.trim();
+    const location = locations.find((l) => l.name === boxName);
+    return rowFor(groupOf(card), location) ? `${boxName} · ${placementLabel(card, location)}` : boxName;
+  }
+
   async function addCard(name: string) {
-    if (!name.trim() || saving) return;
+    if (!name.trim() || saving || !box.trim()) return;
     setSaving(true);
     setStatus(null);
     try {
@@ -44,7 +64,20 @@ export default function AddCardPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Something went wrong");
-      setStatus({ type: "success", text: data.message });
+
+      const where = data.card ? whereItGoes(data.card) : box.trim();
+      setStatus({ type: "success", text: data.message, where });
+      setRecent((prev) =>
+        [
+          {
+            id: Date.now(),
+            text: `${quantity}x ${data.card?.name ?? name}${foil ? " (foil)" : ""}`,
+            where,
+          },
+          ...prev,
+        ].slice(0, 10)
+      );
+
       setQuery("");
       setSuggestions([]);
       setQuantity(1);
@@ -61,19 +94,16 @@ export default function AddCardPage() {
   }
 
   return (
-    <main className="mx-auto max-w-xl p-6">
+    <main className="mx-auto w-full max-w-xl p-6">
       <h1 className="mb-6 text-2xl font-bold">Add Cards</h1>
 
-      <div className="mb-4 grid grid-cols-3 gap-3">
-        <label className="col-span-2 text-sm">
-          Box
-          <input
-            value={box}
-            onChange={(e) => setBox(e.target.value)}
-            className="mt-1 w-full rounded border border-gray-400 bg-transparent px-3 py-2"
-          />
-        </label>
-        <label className="text-sm">
+      <label className="mb-4 block text-sm">
+        Where is this card going?
+        <BoxPicker value={box} onChange={setBox} onLocations={setLocations} />
+      </label>
+
+      <div className="mb-4 flex items-end gap-4">
+        <label className="w-28 text-sm">
           Quantity
           <input
             type="number"
@@ -83,12 +113,16 @@ export default function AddCardPage() {
             className="mt-1 w-full rounded border border-gray-400 bg-transparent px-3 py-2"
           />
         </label>
+        <label className="mb-2 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={foil}
+            onChange={(e) => setFoil(e.target.checked)}
+            className="h-4 w-4 accent-yellow-400"
+          />
+          Foil
+        </label>
       </div>
-
-      <label className="mb-4 flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={foil} onChange={(e) => setFoil(e.target.checked)} />
-        Foil
-      </label>
 
       <div className="relative">
         <input
@@ -104,12 +138,12 @@ export default function AddCardPage() {
         />
 
         {visibleSuggestions.length > 0 && (
-          <ul className="absolute z-10 mt-1 max-h-72 w-full overflow-y-auto rounded border border-gray-400 bg-white text-black shadow">
+          <ul className="absolute z-10 mt-1 max-h-72 w-full overflow-y-auto rounded border border-gray-400 bg-gray-900 shadow-2xl">
             {visibleSuggestions.map((name) => (
               <li key={name}>
                 <button
                   onClick={() => addCard(name)}
-                  className="w-full px-3 py-2 text-left hover:bg-gray-200"
+                  className="w-full px-3 py-2 text-left hover:bg-gray-500/20"
                 >
                   {name}
                 </button>
@@ -119,11 +153,29 @@ export default function AddCardPage() {
         )}
       </div>
 
+      {!box.trim() && <p className="mt-2 text-sm text-gray-500">Choose where this card is going first.</p>}
       {saving && <p className="mt-4 text-sm text-gray-500">Adding...</p>}
-      {status && (
-        <p className={`mt-4 text-sm ${status.type === "success" ? "text-green-500" : "text-red-500"}`}>
-          {status.text}
-        </p>
+
+      {status?.type === "success" && (
+        <div className="mt-4 rounded-lg border border-green-500/40 bg-green-500/10 p-3">
+          <p className="text-sm text-green-400">{status.text}</p>
+          {status.where && <p className="mt-1 text-lg font-semibold">📍 {status.where}</p>}
+        </div>
+      )}
+      {status?.type === "error" && <p className="mt-4 text-sm text-red-500">{status.text}</p>}
+
+      {recent.length > 0 && (
+        <div className="mt-8">
+          <h2 className="mb-2 text-lg font-semibold">Recently added</h2>
+          <ul className="text-sm">
+            {recent.map((item) => (
+              <li key={item.id} className="flex justify-between gap-3 border-b border-gray-700/30 py-1.5">
+                <span>{item.text}</span>
+                <span className="text-right text-gray-500">{item.where}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </main>
   );
