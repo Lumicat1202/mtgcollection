@@ -93,7 +93,8 @@ export default function CollectionPage() {
     Promise.all([fetchCards(), fetchLocations()])
       .then(([cardList, locationList]) => {
         setCards(cardList);
-        setLocations(locationList);
+
+        // Opened from the Boxes page?
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -346,7 +347,15 @@ export default function CollectionPage() {
         />
         <select
           value={boxFilter}
-          onChange={(e) => setBoxFilter(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value;
+            setBoxFilter(value);
+            // Keep the address in sync so refreshing stays on this box
+            const url = new URL(window.location.href);
+            if (value === WHOLE_COLLECTION) url.searchParams.delete("box");
+            else url.searchParams.set("box", value);
+            window.history.replaceState(null, "", url);
+          }}
           className="rounded border border-gray-400 bg-transparent px-3 py-2"
         >
           <option value={WHOLE_COLLECTION} className="text-black">
@@ -479,9 +488,8 @@ export default function CollectionPage() {
                 <img
                   src={selected.image_url}
                   alt={selected.name}
-                  className={`w-full self-start rounded-xl sm:w-72 ${
-                    isValuable(selected) ? "ring-4 ring-yellow-400" : ""
-                  }`}
+                  className={`w-full self-start rounded-xl sm:w-72 ${isValuable(selected) ? "ring-4 ring-yellow-400" : ""
+                    }`}
                 />
               )}
               <div className="flex-1">

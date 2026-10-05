@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import BoxEditor, { type LocationDraft, SUGGESTED_ROWS } from "@/components/BoxEditor";
 import { type Card, money, priceOf } from "@/components/CardTiles";
 import { GROUP_LABELS, type Location } from "@/lib/box-layout";
@@ -69,15 +70,15 @@ export default function BoxesPage() {
     const res =
       editing?.mode === "edit"
         ? await fetch(`/api/locations/${editing.location.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body,
-          })
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body,
+        })
         : await fetch("/api/locations", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body,
-          });
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
 
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Save failed");
@@ -139,10 +140,10 @@ export default function BoxesPage() {
             editing.mode === "new"
               ? editing.draft
               : {
-                  name: editing.location.name,
-                  kind: editing.location.kind,
-                  rows: editing.location.rows.map((r) => [...r.groups]),
-                }
+                name: editing.location.name,
+                kind: editing.location.kind,
+                rows: editing.location.rows.map((r) => [...r.groups]),
+              }
           }
           isNew={editing.mode === "new"}
           boxes={locations.filter((l) => l.kind === "box")}
@@ -186,7 +187,20 @@ export default function BoxesPage() {
             <li key={location.id} className="rounded-lg border border-gray-400/40 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold">{location.name}</h2>
+                  <h2 className="flex flex-wrap items-baseline gap-x-3 text-lg font-semibold">
+                    <Link
+                      href={`/collection?box=${encodeURIComponent(location.name)}`}
+                      className="hover:text-yellow-400 hover:underline"
+                    >
+                      {location.name}
+                    </Link>
+                    <Link
+                      href={`/collection?box=${encodeURIComponent(location.name)}`}
+                      className="text-sm font-normal text-blue-400 hover:underline"
+                    >
+                      View cards
+                    </Link>
+                  </h2>
                   <p className="text-sm text-gray-500">
                     {location.kind === "box"
                       ? `Box with ${location.rows.length} row${location.rows.length === 1 ? "" : "s"}`
