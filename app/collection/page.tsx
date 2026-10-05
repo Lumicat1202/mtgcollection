@@ -1,28 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-
-// Cards worth this much or more get the gold $$ badge
-const VALUABLE_PRICE = 5;
-
-type Card = {
-  id: string;
-  name: string;
-  set_code: string | null;
-  collector_number: string | null;
-  quantity: number;
-  foil: boolean;
-  box: string;
-  colors: string[];
-  type_line: string | null;
-  mana_value: number | null;
-  oracle_text: string | null;
-  rarity: string | null;
-  image_url: string | null;
-  price_usd: number | null;
-};
+import CardTiles, { type Card, priceOf, isValuable, money, ValueBadge } from "@/components/CardTiles";
+import {
+  type GroupCode,
+  type Location,
+  TYPE_ORDER,
+  buildBoxView,
+  groupOf,
+  placementLabel,
+  rowFor,
+  typeOf,
+} from "@/lib/box-layout";
 
 type SortBy = "mv" | "price" | "name";
+
+const WHOLE_COLLECTION = "__all__";
 
 const COLOR_ORDER = ["White", "Blue", "Black", "Red", "Green", "Multicolor", "Colorless", "Lands"];
 const COLOR_NAMES: Record<string, string> = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green" };
@@ -36,7 +29,18 @@ const COLOR_ACCENTS: Record<string, string> = {
   Colorless: "border-gray-300",
   Lands: "border-orange-800",
 };
-const TYPE_ORDER = ["Creature", "Planeswalker", "Battle", "Instant", "Sorcery", "Artifact", "Enchantment", "Land", "Other"];
+const GROUP_ACCENTS: Record<GroupCode, string> = {
+  W: "border-yellow-200",
+  U: "border-blue-500",
+  B: "border-gray-500",
+  R: "border-red-500",
+  G: "border-green-500",
+  C: "border-gray-300",
+  BASIC: "border-orange-800",
+  LANDS: "border-orange-500",
+  TOKENS: "border-purple-400",
+  MULTI: "border-amber-400",
+};
 
 function colorGroup(card: Card) {
   const colors = card.colors ?? [];
@@ -46,28 +50,8 @@ function colorGroup(card: Card) {
   return "Colorless";
 }
 
-function typeGroup(card: Card) {
-  const frontFace = (card.type_line ?? "").split("//")[0];
-  return TYPE_ORDER.find((t) => frontFace.includes(t)) ?? "Other";
-}
-
-function priceOf(card: Card) {
-  return card.price_usd != null ? Number(card.price_usd) : 0;
-}
-
-function isValuable(card: Card) {
-  return priceOf(card) >= VALUABLE_PRICE;
-}
-
-function money(amount: number) {
-  return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
-}
-
-function ValueBadge() {
-  return (
-    <span className="rounded-full bg-yellow-400 px-2 py-0.5 text-xs font-extrabold text-black shadow">$$</span>
-  );
-}
+const copiesOf = (list: Card[]) => list.reduce((sum, c) => sum + c.quantity, 0);
+const valueOf = (list: Card[]) => list.reduce((sum, c) => sum + priceOf(c) * c.quantity, 0);
 
 async function fetchCards(): Promise<Card[]> {
   const res = await fetch("/api/cards");
@@ -76,12 +60,20 @@ async function fetchCards(): Promise<Card[]> {
   return data.cards;
 }
 
+async function fetchLocations(): Promise<Location[]> {
+  const res = await fetch("/api/locations");
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data.locations;
+}
+
 export default function CollectionPage() {
   const [cards, setCards] = useState<Card[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [boxFilter, setBoxFilter] = useState("All boxes");
+  const [boxFilter, setBoxFilter] = useState(WHOLE_COLLECTION);
   const [sortBy, setSortBy] = useState<SortBy>("mv");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"grid" | "list">("grid");
@@ -98,8 +90,11 @@ export default function CollectionPage() {
   const [moveCount, setMoveCount] = useState(1);
 
   useEffect(() => {
-    fetchCards()
-      .then(setCards)
+    Promise.all([fetchCards(), fetchLocations()])
+      .then(([cardList, locationList]) => {
+        setCards(cardList);
+        setLocations(locationList);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -114,24 +109,53 @@ export default function CollectionPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selected]);
 
-  const boxes = useMemo(
-    () => ["All boxes", ...Array.from(new Set(cards.map((c) => c.box))).sort()],
-    [cards]
+  const locationByName = useMemo(() => new Map(locations.map((l) => [l.name, l])), [locations]);
+
+  // Your boxes first (in the order you made them), then any other names cards use
+  const boxNames = useMemo(() => {
+    const names = locations.map((l) => l.name);
+    for (const card of cards) if (!names.includes(card.box)) names.push(card.box);
+    return names;
+  }, [locations, cards]);
+
+  const selectedLocation = boxFilter === WHOLE_COLLECTION ? null : locationByName.get(boxFilter) ?? null;
+
+  // Short location for card captions, like "Main Box · Row 2"
+  function shortLocation(card: Card) {
+    const row = rowFor(groupOf(card), locationByName.get(card.box));
+    return row ? `${card.box} · Row ${row}` : card.box;
+  }
+
+  // Full location for the close-up, like "Main Box · Row 2 · Black · Sorcery"
+  function fullLocation(card: Card) {
+    const location = locationByName.get(card.box);
+    return rowFor(groupOf(card), location) ? `${card.box} · ${placementLabel(card, location)}` : card.box;
+  }
+
+  // Cards in the chosen scope (whole collection or one box), before searching
+  const scopeCards = useMemo(
+    () => (boxFilter === WHOLE_COLLECTION ? cards : cards.filter((c) => c.box === boxFilter)),
+    [cards, boxFilter]
   );
 
-  // Filter, then group into color -> type -> cards
-  const grouped = useMemo(() => {
+  // Then apply the search
+  const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    const filtered = cards.filter(
-      (c) =>
-        (boxFilter === "All boxes" || c.box === boxFilter) &&
-        (!term || c.name.toLowerCase().includes(term))
-    );
+    return term ? scopeCards.filter((c) => c.name.toLowerCase().includes(term)) : scopeCards;
+  }, [scopeCards, search]);
 
+  // Box view: row by row, exactly like the real box
+  const boxView = useMemo(
+    () => (selectedLocation?.kind === "box" ? buildBoxView(filtered, selectedLocation) : null),
+    [filtered, selectedLocation]
+  );
+
+  // Whole collection view: color -> type -> cards
+  const grouped = useMemo(() => {
     const groups: Record<string, Record<string, Card[]>> = {};
     for (const card of filtered) {
       const color = colorGroup(card);
-      const type = typeGroup(card);
+      const type = typeOf(card);
       groups[color] ??= {};
       groups[color][type] ??= [];
       groups[color][type].push(card);
@@ -147,25 +171,22 @@ export default function CollectionPage() {
       for (const list of Object.values(color)) list.sort(compare);
     }
     return groups;
-  }, [cards, search, boxFilter, sortBy]);
-
-  const totalCopies = cards.reduce((sum, c) => sum + c.quantity, 0);
-  const totalValue = cards.reduce((sum, c) => sum + priceOf(c) * c.quantity, 0);
+  }, [filtered, sortBy]);
 
   const mostValuable = useMemo(
     () =>
-      [...cards]
+      [...scopeCards]
         .filter((c) => priceOf(c) > 0)
         .sort((a, b) => priceOf(b) - priceOf(a))
         .slice(0, 10),
-    [cards]
+    [scopeCards]
   );
 
-  function toggle(color: string) {
+  function toggle(key: string) {
     setCollapsed((prev) => {
       const next = new Set(prev);
-      if (next.has(color)) next.delete(color);
-      else next.add(color);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -260,23 +281,28 @@ export default function CollectionPage() {
   if (loading) return <p className="p-6">Loading your collection...</p>;
   if (error) return <p className="p-6 text-red-500">Error: {error}</p>;
 
+  const scopeLabel = boxFilter === WHOLE_COLLECTION ? "Collection value" : `${boxFilter} value`;
+  const nothingMatches = filtered.length === 0;
+
   return (
     <main className="mx-auto w-full max-w-5xl p-6">
-      {/* Header with total value */}
+      {/* Header with value */}
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">My Collection</h1>
+          <h1 className="text-2xl font-bold">
+            {boxFilter === WHOLE_COLLECTION ? "My Collection" : boxFilter}
+          </h1>
           <p className="text-sm text-gray-500">
-            {cards.length} unique cards · {totalCopies} total copies
+            {scopeCards.length} unique cards, {copiesOf(scopeCards)} total copies
           </p>
         </div>
         <div className="text-right">
-          <p className="text-sm text-gray-500">Collection value</p>
-          <p className="text-3xl font-bold text-green-500">{money(totalValue)}</p>
+          <p className="text-sm text-gray-500">{scopeLabel}</p>
+          <p className="text-3xl font-bold text-green-500">{money(valueOf(scopeCards))}</p>
           <button
             onClick={refreshPrices}
             disabled={refreshing}
-            className="mt-1 text-sm text-blue-500 hover:underline disabled:opacity-50"
+            className="mt-1 text-sm text-blue-400 hover:underline disabled:opacity-50"
           >
             {refreshing ? "Refreshing prices..." : "🔄 Refresh prices"}
           </button>
@@ -323,16 +349,21 @@ export default function CollectionPage() {
           onChange={(e) => setBoxFilter(e.target.value)}
           className="rounded border border-gray-400 bg-transparent px-3 py-2"
         >
-          {boxes.map((b) => (
-            <option key={b} value={b} className="text-black">
-              {b}
+          <option value={WHOLE_COLLECTION} className="text-black">
+            Whole collection
+          </option>
+          {boxNames.map((name) => (
+            <option key={name} value={name} className="text-black">
+              {name}
             </option>
           ))}
         </select>
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as SortBy)}
-          className="rounded border border-gray-400 bg-transparent px-3 py-2"
+          disabled={!!boxView}
+          title={boxView ? "Box view always follows the order of your box" : undefined}
+          className="rounded border border-gray-400 bg-transparent px-3 py-2 disabled:opacity-50"
         >
           <option value="mv" className="text-black">Sort: Mana value</option>
           <option value="price" className="text-black">Sort: Price (high to low)</option>
@@ -351,129 +382,88 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      {COLOR_ORDER.filter((color) => grouped[color]).map((color) => {
-        const types = grouped[color];
-        const allInColor = Object.values(types).flat();
-        const count = allInColor.reduce((sum, c) => sum + c.quantity, 0);
-        const value = allInColor.reduce((sum, c) => sum + priceOf(c) * c.quantity, 0);
-        const isCollapsed = collapsed.has(color);
+      {nothingMatches && <p className="text-gray-500">No cards match. Try a different search or box.</p>}
 
-        return (
-          <section key={color} className={`mb-8 border-l-4 pl-4 ${COLOR_ACCENTS[color]}`}>
-            <button onClick={() => toggle(color)} className="mb-2 text-xl font-semibold">
-              {isCollapsed ? "▸" : "▾"} {color}{" "}
-              <span className="text-sm font-normal text-gray-500">
-                ({count}) · {money(value)}
-              </span>
-            </button>
+      {/* ---------- Box view: row by row ---------- */}
+      {boxView && (
+        <>
+          {boxView.rows.map((row) => {
+            const rowCards = row.groups.flatMap((g) => g.sections.flatMap((s) => s.cards));
+            if (rowCards.length === 0) return null;
+            const key = `row-${row.row}`;
+            const isCollapsed = collapsed.has(key);
 
-            {!isCollapsed &&
-              TYPE_ORDER.filter((type) => types[type]).map((type) => (
-                <div key={type} className="mb-6">
-                  <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
-                    {type} ({types[type].reduce((s, c) => s + c.quantity, 0)})
-                  </h3>
+            return (
+              <section key={key} className="mb-10">
+                <button onClick={() => toggle(key)} className="mb-4 text-2xl font-semibold">
+                  {isCollapsed ? "▸" : "▾"} Row {row.row}{" "}
+                  <span className="text-sm font-normal text-gray-500">
+                    ({copiesOf(rowCards)}) · {money(valueOf(rowCards))}
+                  </span>
+                </button>
 
-                  {view === "grid" ? (
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                      {types[type].map((card) => (
-                        <button key={card.id} onClick={() => openCard(card)} className="group text-left">
-                          <div className="relative">
-                            {card.image_url ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={card.image_url}
-                                alt={card.name}
-                                loading="lazy"
-                                className={`w-full rounded-lg shadow transition group-hover:scale-[1.03] ${
-                                  isValuable(card) ? "ring-4 ring-yellow-400" : ""
-                                }`}
-                              />
-                            ) : (
-                              <div
-                                className={`flex aspect-[488/680] items-center justify-center rounded-lg border p-2 text-center text-sm ${
-                                  isValuable(card) ? "border-yellow-400 ring-4 ring-yellow-400" : "border-gray-400"
-                                }`}
-                              >
-                                {card.name}
-                              </div>
-                            )}
-                            {isValuable(card) && (
-                              <span className="absolute right-2 top-2">
-                                <ValueBadge />
-                              </span>
-                            )}
-                            {card.quantity > 1 && (
-                              <span className="absolute bottom-2 right-2 rounded-full bg-black/80 px-2 py-0.5 text-xs font-bold text-white">
-                                {card.quantity}x
-                              </span>
-                            )}
-                            {card.foil && (
-                              <span className="absolute bottom-2 left-2 rounded-full bg-amber-400 px-2 py-0.5 text-xs font-bold text-black">
-                                Foil
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-1 flex justify-between gap-2 text-xs">
-                            <span className="truncate text-gray-500">{card.box}</span>
-                            <span
-                              className={`whitespace-nowrap font-semibold ${
-                                isValuable(card) ? "text-yellow-500" : "text-green-500"
-                              }`}
-                            >
-                              {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
-                            </span>
-                          </p>
-                        </button>
+                {!isCollapsed &&
+                  row.groups.map((g) => (
+                    <div key={g.group} className={`mb-8 border-l-4 pl-4 ${GROUP_ACCENTS[g.group]}`}>
+                      <h3 className="mb-3 text-lg font-semibold">{g.title}</h3>
+                      {g.sections.map((section) => (
+                        <div key={section.title || g.group} className="mb-5">
+                          {section.title && (
+                            <h4 className="mb-2 text-sm font-semibold text-gray-500">
+                              {section.title} ({copiesOf(section.cards)})
+                            </h4>
+                          )}
+                          <CardTiles cards={section.cards} view={view} onOpen={openCard} />
+                        </div>
                       ))}
                     </div>
-                  ) : (
-                    <table className="w-full table-fixed text-sm">
-                      <tbody>
-                        {types[type].map((card) => (
-                          <tr
-                            key={card.id}
-                            onClick={() => openCard(card)}
-                            className={`cursor-pointer border-b border-gray-700/30 hover:bg-gray-500/10 ${
-                              isValuable(card) ? "bg-yellow-400/10" : ""
-                            }`}
-                          >
-                            <td className="w-10 py-1">{card.quantity}x</td>
-                            <td className="truncate py-1 pr-3">
-                              {card.name}
-                              {card.foil && <span className="ml-2 text-xs text-amber-400">foil</span>}
-                              {isValuable(card) && (
-                                <span className="ml-2">
-                                  <ValueBadge />
-                                </span>
-                              )}
-                            </td>
-                            <td className="w-16 whitespace-nowrap py-1 text-gray-500">MV {card.mana_value ?? 0}</td>
-                            <td className="w-14 py-1 uppercase text-gray-500">{card.set_code}</td>
-                            <td
-                              className={`w-20 whitespace-nowrap py-1 pr-3 text-right ${
-                                isValuable(card) ? "font-bold text-yellow-500" : "text-green-500"
-                              }`}
-                            >
-                              {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
-                            </td>
-                            <td className="w-32 truncate py-1 text-right text-gray-500">{card.box}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              ))}
-          </section>
-        );
-      })}
+                  ))}
+              </section>
+            );
+          })}
 
-      {Object.keys(grouped).length === 0 && (
-        <p className="text-gray-500">No cards match. Try a different search or box.</p>
+          {boxView.unplaced.length > 0 && (
+            <section className="mb-10">
+              <h2 className="mb-1 text-xl font-semibold">Not assigned to a row</h2>
+              <p className="mb-3 text-sm text-gray-500">
+                This box&apos;s rows don&apos;t include a spot for these cards yet.
+              </p>
+              <CardTiles cards={boxView.unplaced} view={view} onOpen={openCard} />
+            </section>
+          )}
+        </>
       )}
 
-      {/* Card close-up */}
+      {/* ---------- Whole collection (or a non-box location): by color and type ---------- */}
+      {!boxView &&
+        COLOR_ORDER.filter((color) => grouped[color]).map((color) => {
+          const types = grouped[color];
+          const allInColor = Object.values(types).flat();
+          const isCollapsed = collapsed.has(color);
+
+          return (
+            <section key={color} className={`mb-8 border-l-4 pl-4 ${COLOR_ACCENTS[color]}`}>
+              <button onClick={() => toggle(color)} className="mb-2 text-xl font-semibold">
+                {isCollapsed ? "▸" : "▾"} {color}{" "}
+                <span className="text-sm font-normal text-gray-500">
+                  ({copiesOf(allInColor)}) · {money(valueOf(allInColor))}
+                </span>
+              </button>
+
+              {!isCollapsed &&
+                TYPE_ORDER.filter((type) => types[type]).map((type) => (
+                  <div key={type} className="mb-6">
+                    <h3 className="mb-2 text-sm font-semibold text-gray-500">
+                      {type} ({copiesOf(types[type])})
+                    </h3>
+                    <CardTiles cards={types[type]} view={view} onOpen={openCard} caption={shortLocation} />
+                  </div>
+                ))}
+            </section>
+          );
+        })}
+
+      {/* ---------- Card close-up ---------- */}
       {selected && (
         <div
           onClick={() => setSelected(null)}
@@ -481,7 +471,7 @@ export default function CollectionPage() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="max-h-full w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-5 text-black shadow-2xl dark:bg-gray-900 dark:text-white"
+            className="max-h-full w-full max-w-3xl overflow-y-auto rounded-xl bg-gray-900 p-5 text-white shadow-2xl"
           >
             <div className="flex flex-col gap-5 sm:flex-row">
               {selected.image_url && (
@@ -516,9 +506,9 @@ export default function CollectionPage() {
                   </p>
                 )}
 
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                  <dt className="text-gray-500">Box</dt>
-                  <dd>{selected.box}</dd>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                  <dt className="text-gray-500">Location</dt>
+                  <dd>{fullLocation(selected)}</dd>
                   <dt className="text-gray-500">Mana value</dt>
                   <dd>{selected.mana_value ?? 0}</dd>
                   <dt className="text-gray-500">Set</dt>
@@ -543,7 +533,7 @@ export default function CollectionPage() {
 
                 {/* Manage */}
                 <div className="mt-5 border-t border-gray-500/30 pt-4">
-                  <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">Manage</h3>
+                  <h3 className="mb-3 text-sm font-semibold text-gray-500">Manage</h3>
 
                   <div className="mb-4 flex items-center gap-3">
                     <span className="w-20 text-sm text-gray-500">Quantity</span>
@@ -579,12 +569,12 @@ export default function CollectionPage() {
                       list="box-options"
                       value={moveBox}
                       onChange={(e) => setMoveBox(e.target.value)}
-                      placeholder="Box name"
+                      placeholder="Box or location name"
                       className="min-w-0 flex-1 rounded border border-gray-400 bg-transparent px-2 py-1.5 text-sm"
                     />
                     <datalist id="box-options">
-                      {boxes
-                        .filter((b) => b !== "All boxes" && b !== selected.box)
+                      {boxNames
+                        .filter((b) => b !== selected.box)
                         .map((b) => (
                           <option key={b} value={b} />
                         ))}
@@ -601,7 +591,7 @@ export default function CollectionPage() {
                   <button
                     disabled={busy}
                     onClick={() => deleteCard(selected)}
-                    className="rounded border border-red-500 px-3 py-1.5 text-sm text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+                    className="rounded border border-red-500 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                   >
                     🗑️ Delete from collection
                   </button>
