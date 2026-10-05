@@ -1,26 +1,67 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* Always use the dark styles, since the app has a dark fantasy theme */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-heading);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@theme {
+  /* Warmer grays that read well over dark artwork */
+  --color-gray-300: #cfc8dc;
+  --color-gray-400: #6b6380;
+  --color-gray-500: #a8a0bc;
+  --color-gray-700: #3a3450;
+  --color-gray-900: #1c1828;
+  --color-gold: #d4af37;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background-color: #120f1a;
   }
-}
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    color: #ece4d4;
+    font-family: var(--font-body), system-ui, sans-serif;
+  }
+
+  h1,
+  h2 {
+    font-family: var(--font-heading), Georgia, serif;
+    letter-spacing: 0.02em;
+  }
+
+  h1 {
+    color: var(--color-gold);
+  }
+
+  /* Every page sits on a smoky glass panel over the artwork */
+  main {
+    background-color: rgb(18 15 26 / 0.84);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgb(212 175 55 / 0.25);
+    border-radius: 1rem;
+    margin-block: 1.5rem;
+    box-shadow: 0 20px 60px rgb(0 0 0 / 0.5);
+  }
+
+  /* On phones, panels go edge to edge */
+  @media (max-width: 640px) {
+    main {
+      border-radius: 0;
+      border-inline: none;
+      margin-block: 0;
+    }
+  }
+
+  input,
+  select,
+  textarea {
+    color: inherit;
+  }
 }
