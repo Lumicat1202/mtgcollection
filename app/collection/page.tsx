@@ -12,6 +12,7 @@ import {
   rowFor,
   typeOf,
 } from "@/lib/box-layout";
+import { type SearchField, SEARCH_FIELDS, makeMatcher } from "@/lib/search";
 
 type SortBy = "mv" | "price" | "name";
 
@@ -73,6 +74,7 @@ export default function CollectionPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [searchIn, setSearchIn] = useState<SearchField>("all");
   const [boxFilter, setBoxFilter] = useState(WHOLE_COLLECTION);
   const [sortBy, setSortBy] = useState<SortBy>("mv");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -93,8 +95,10 @@ export default function CollectionPage() {
     Promise.all([fetchCards(), fetchLocations()])
       .then(([cardList, locationList]) => {
         setCards(cardList);
-
-        // Opened from the Boxes page?
+        setLocations(locationList);
+        // Opened from the Boxes page? Start on that box
+        const fromUrl = new URLSearchParams(window.location.search).get("box");
+        if (fromUrl) setBoxFilter(fromUrl);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -133,6 +137,15 @@ export default function CollectionPage() {
     return rowFor(groupOf(card), location) ? `${card.box} · ${placementLabel(card, location)}` : card.box;
   }
 
+  function changeBoxFilter(value: string) {
+    setBoxFilter(value);
+    // Keep the address in sync so refreshing stays on this box
+    const url = new URL(window.location.href);
+    if (value === WHOLE_COLLECTION) url.searchParams.delete("box");
+    else url.searchParams.set("box", value);
+    window.history.replaceState(null, "", url);
+  }
+
   // Cards in the chosen scope (whole collection or one box), before searching
   const scopeCards = useMemo(
     () => (boxFilter === WHOLE_COLLECTION ? cards : cards.filter((c) => c.box === boxFilter)),
@@ -141,9 +154,10 @@ export default function CollectionPage() {
 
   // Then apply the search
   const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return term ? scopeCards.filter((c) => c.name.toLowerCase().includes(term)) : scopeCards;
-  }, [scopeCards, search]);
+    if (!search.trim()) return scopeCards;
+    const matches = makeMatcher(search, searchIn);
+    return scopeCards.filter(matches);
+  }, [scopeCards, search, searchIn]);
 
   // Box view: row by row, exactly like the real box
   const boxView = useMemo(
@@ -283,7 +297,8 @@ export default function CollectionPage() {
   if (error) return <p className="p-6 text-red-500">Error: {error}</p>;
 
   const scopeLabel = boxFilter === WHOLE_COLLECTION ? "Collection value" : `${boxFilter} value`;
-  const nothingMatches = filtered.length === 0;
+  const searching = search.trim().length > 0;
+  const placeholder = SEARCH_FIELDS.find((f) => f.value === searchIn)?.placeholder ?? "Search...";
 
   return (
     <main className="mx-auto w-full max-w-5xl p-6">
@@ -311,8 +326,8 @@ export default function CollectionPage() {
       </div>
       {priceMsg && <p className="mb-4 text-right text-sm text-gray-500">{priceMsg}</p>}
 
-      {/* Most valuable */}
-      {mostValuable.length > 0 && (
+      {/* Most valuable (hidden while searching, so results come first) */}
+      {!searching && mostValuable.length > 0 && (
         <div className="mb-8 rounded-lg border border-gray-400/40 p-4">
           <h2 className="mb-3 font-semibold">💎 Most valuable</h2>
           <ol className="grid gap-x-6 text-sm sm:grid-cols-2">
@@ -337,25 +352,38 @@ export default function CollectionPage() {
         </div>
       )}
 
-      {/* Controls */}
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row">
+      {/* Search */}
+      <div className="mb-2 flex flex-col gap-3 sm:flex-row">
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name..."
+          placeholder={placeholder}
           className="flex-1 rounded border border-gray-400 bg-transparent px-3 py-2"
         />
         <select
+          value={searchIn}
+          onChange={(e) => setSearchIn(e.target.value as SearchField)}
+          aria-label="Search in"
+          className="rounded border border-gray-400 bg-transparent px-3 py-2"
+        >
+          {SEARCH_FIELDS.map((f) => (
+            <option key={f.value} value={f.value} className="text-black">
+              Search in: {f.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="mb-4 text-xs text-gray-500">
+        {searching
+          ? `${filtered.length} matching card${filtered.length === 1 ? "" : "s"} (${copiesOf(filtered)} copies)`
+          : 'Tip: use quotes for an exact phrase, like "draw a card", and a minus sign to leave something out, like cat -token.'}
+      </p>
+
+      {/* Other controls */}
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row">
+        <select
           value={boxFilter}
-          onChange={(e) => {
-            const value = e.target.value;
-            setBoxFilter(value);
-            // Keep the address in sync so refreshing stays on this box
-            const url = new URL(window.location.href);
-            if (value === WHOLE_COLLECTION) url.searchParams.delete("box");
-            else url.searchParams.set("box", value);
-            window.history.replaceState(null, "", url);
-          }}
+          onChange={(e) => changeBoxFilter(e.target.value)}
           className="rounded border border-gray-400 bg-transparent px-3 py-2"
         >
           <option value={WHOLE_COLLECTION} className="text-black">
@@ -378,7 +406,7 @@ export default function CollectionPage() {
           <option value="price" className="text-black">Sort: Price (high to low)</option>
           <option value="name" className="text-black">Sort: Name</option>
         </select>
-        <div className="flex overflow-hidden rounded border border-gray-400">
+        <div className="flex overflow-hidden rounded border border-gray-400 sm:ml-auto">
           {(["grid", "list"] as const).map((v) => (
             <button
               key={v}
@@ -391,7 +419,11 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      {nothingMatches && <p className="text-gray-500">No cards match. Try a different search or box.</p>}
+      {filtered.length === 0 && (
+        <p className="text-gray-500">
+          {searching ? "No cards match that search. Try fewer words or a different Search in option." : "No cards here yet."}
+        </p>
+      )}
 
       {/* ---------- Box view: row by row ---------- */}
       {boxView && (
@@ -488,8 +520,9 @@ export default function CollectionPage() {
                 <img
                   src={selected.image_url}
                   alt={selected.name}
-                  className={`w-full self-start rounded-xl sm:w-72 ${isValuable(selected) ? "ring-4 ring-yellow-400" : ""
-                    }`}
+                  className={`w-full self-start rounded-xl sm:w-72 ${
+                    isValuable(selected) ? "ring-4 ring-yellow-400" : ""
+                  }`}
                 />
               )}
               <div className="flex-1">
