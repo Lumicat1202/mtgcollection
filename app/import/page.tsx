@@ -48,9 +48,11 @@ function saveGuide(guide: Guide | null) {
 export default function ImportPage() {
   const [rows, setRows] = useState<PreviewRow[]>([]);
   const [fileName, setFileName] = useState("");
+  const [fileKey, setFileKey] = useState(0);
   const [box, setBox] = useState("");
   const [locations, setLocations] = useState<Location[]>([]);
   const [importing, setImporting] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [valuable, setValuable] = useState<ValuableCard[] | null>(null);
   const [threshold, setThreshold] = useState(5);
@@ -96,6 +98,13 @@ export default function ImportPage() {
     saveGuide(null);
   }
 
+  // Clear the chosen file so the same file can be picked again
+  function resetFile() {
+    setRows([]);
+    setFileName("");
+    setFileKey((k) => k + 1);
+  }
+
   function handleFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -125,6 +134,13 @@ export default function ImportPage() {
     });
   }
 
+  function requestBody() {
+    return JSON.stringify({
+      box,
+      rows: rows.map(({ scryfall_id, quantity, foil }) => ({ scryfall_id, quantity, foil })),
+    });
+  }
+
   async function handleImport() {
     setImporting(true);
     setStatus(null);
@@ -133,10 +149,7 @@ export default function ImportPage() {
       const res = await fetch("/api/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          box,
-          rows: rows.map(({ scryfall_id, quantity, foil }) => ({ scryfall_id, quantity, foil })),
-        }),
+        body: requestBody(),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Import failed");
@@ -155,9 +168,7 @@ export default function ImportPage() {
       };
       setGuide(newGuide);
       saveGuide(newGuide);
-
-      setRows([]);
-      setFileName("");
+      resetFile();
     } catch (err) {
       setStatus({ type: "error", text: err instanceof Error ? err.message : "Import failed" });
     } finally {
@@ -165,8 +176,38 @@ export default function ImportPage() {
     }
   }
 
+  async function handleRemove() {
+    const copies = rows.reduce((sum, r) => sum + r.quantity, 0);
+    if (
+      !confirm(
+        `Remove the ${copies} cards in ${fileName} from ${box.trim()}? Use this to undo an import. Copies you had before stay.`
+      )
+    ) {
+      return;
+    }
+    setRemoving(true);
+    setStatus(null);
+    setValuable(null);
+    try {
+      const res = await fetch("/api/import/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestBody(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Remove failed");
+      setStatus({ type: "success", text: data.message });
+      resetFile();
+    } catch (err) {
+      setStatus({ type: "error", text: err instanceof Error ? err.message : "Remove failed" });
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   const totalCopies = rows.reduce((sum, r) => sum + r.quantity, 0);
   const guideLocation = guide ? locations.find((l) => l.name === guide.boxName) ?? null : null;
+  const working = importing || removing;
 
   return (
     <main className="mx-auto w-full max-w-2xl p-6">
@@ -182,7 +223,13 @@ export default function ImportPage() {
 
       <label className="mb-6 block text-sm">
         CSV file
-        <input type="file" accept=".csv" onChange={handleFile} className="mt-1 block w-full text-sm" />
+        <input
+          key={fileKey}
+          type="file"
+          accept=".csv"
+          onChange={handleFile}
+          className="mt-1 block w-full text-sm"
+        />
       </label>
 
       {rows.length > 0 && (
@@ -208,16 +255,26 @@ export default function ImportPage() {
             </table>
           </div>
 
-          <button
-            onClick={handleImport}
-            disabled={importing || !box.trim()}
-            className="rounded bg-blue-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
-          >
-            {importing ? "Importing..." : `Import ${totalCopies} cards into ${box.trim() || "..."}`}
-          </button>
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={handleImport}
+              disabled={working || !box.trim()}
+              className="rounded bg-blue-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
+            >
+              {importing ? "Importing..." : `Import ${totalCopies} cards into ${box.trim() || "..."}`}
+            </button>
+            <button
+              onClick={handleRemove}
+              disabled={working || !box.trim()}
+              className="rounded border border-red-500 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+            >
+              {removing ? "Removing..." : "Undo an import: remove these cards"}
+            </button>
+          </div>
           {!box.trim() && <p className="mt-2 text-sm text-gray-500">Choose where these cards are going.</p>}
           <p className="mt-2 text-xs text-gray-500">
-            Heads up: importing the same file twice will double the quantities.
+            Importing the same file twice doubles the quantities. If that happens, pick the same file again and use
+            the remove button to undo one of them.
           </p>
         </>
       )}
