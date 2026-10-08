@@ -12,17 +12,22 @@ const links = [
   { href: "/collection", label: "Collection" },
   { href: "/boxes", label: "Boxes" },
   { href: "/deck", label: "Deck Builder" },
+  { href: "/share", label: "Share" },
 ];
 
 export default function NavBar() {
   const pathname = usePathname();
   const router = useRouter();
   const [email, setEmail] = useState<string | null>(null);
+  const [checked, setChecked] = useState(false);
 
   // Keep track of who is signed in
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
+    supabase.auth.getUser().then(({ data }) => {
+      setEmail(data.user?.email ?? null);
+      setChecked(true);
+    });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setEmail(session?.user?.email ?? null);
     });
@@ -38,33 +43,52 @@ export default function NavBar() {
   // No nav bar on the login page
   if (pathname === "/login") return null;
 
+  const signedIn = !!email;
+
   return (
     <nav className="sticky top-0 z-20 border-b border-gray-400/40 bg-white/90 backdrop-blur dark:bg-black/80">
       <div className="mx-auto flex max-w-5xl items-center gap-1 overflow-x-auto px-4 py-3">
-        <span className="mr-4 whitespace-nowrap font-bold">🃏 MTG Collection</span>
-        {links.map((link) => {
-          const active = pathname === link.href;
-          return (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={`whitespace-nowrap rounded px-3 py-1.5 text-sm ${
-                active ? "bg-blue-600 text-white" : "hover:bg-gray-500/10"
-              }`}
-            >
-              {link.label}
-            </Link>
-          );
-        })}
+        <Link href={signedIn ? "/" : "/login"} className="mr-4 whitespace-nowrap font-bold">
+          🃏 MTG Collection
+        </Link>
+
+        {signedIn &&
+          links.map((link) => {
+            const active = pathname === link.href;
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={`whitespace-nowrap rounded px-3 py-1.5 text-sm ${
+                  active ? "bg-blue-600 text-white" : "hover:bg-gray-500/10"
+                }`}
+              >
+                {link.label}
+              </Link>
+            );
+          })}
 
         <div className="ml-auto flex items-center gap-3 pl-4">
-          {email && <span className="hidden whitespace-nowrap text-sm text-gray-500 md:inline">{email}</span>}
-          <button
-            onClick={logOut}
-            className="whitespace-nowrap rounded border border-gray-400 px-3 py-1.5 text-sm hover:bg-gray-500/10"
-          >
-            Log out
-          </button>
+          {signedIn ? (
+            <>
+              <span className="hidden whitespace-nowrap text-sm text-gray-500 md:inline">{email}</span>
+              <button
+                onClick={logOut}
+                className="whitespace-nowrap rounded border border-gray-400 px-3 py-1.5 text-sm hover:bg-gray-500/10"
+              >
+                Log out
+              </button>
+            </>
+          ) : (
+            checked && (
+              <Link
+                href="/login"
+                className="whitespace-nowrap rounded bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white"
+              >
+                Log in or create an account
+              </Link>
+            )
+          )}
         </div>
       </div>
     </nav>

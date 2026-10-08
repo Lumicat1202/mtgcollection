@@ -2,7 +2,8 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 // Runs before every page loads: keeps people signed in,
-// and sends anyone who isn't signed in to the login page.
+// and sends anyone who isn't signed in to the login page
+// (except shared collection pages, which anyone can view).
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -32,9 +33,10 @@ export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isLoginPage = path === "/login";
   const isApi = path.startsWith("/api");
+  const isPublicPage = path.startsWith("/u/");
 
-  // Not signed in? Go to the login page.
-  if (!user && !isLoginPage && !isApi) {
+  // Not signed in? Go to the login page (unless it's a shared collection)
+  if (!user && !isLoginPage && !isApi && !isPublicPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

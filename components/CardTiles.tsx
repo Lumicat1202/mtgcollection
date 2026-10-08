@@ -44,9 +44,10 @@ type Props = {
   view: "grid" | "list";
   onOpen: (card: Card) => void;
   caption?: (card: Card) => string;
+  hidePrices?: boolean;
 };
 
-export default function CardTiles({ cards, view, onOpen, caption }: Props) {
+export default function CardTiles({ cards, view, onOpen, caption, hidePrices = false }: Props) {
   if (view === "grid") {
     return (
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
@@ -88,16 +89,20 @@ export default function CardTiles({ cards, view, onOpen, caption }: Props) {
                 </span>
               )}
             </div>
-            <p className="mt-1 flex justify-between gap-2 text-xs">
-              <span className="truncate text-gray-500">{caption ? caption(card) : ""}</span>
-              <span
-                className={`whitespace-nowrap font-semibold ${
-                  isValuable(card) ? "text-yellow-500" : "text-green-500"
-                }`}
-              >
-                {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
-              </span>
-            </p>
+            {(caption || !hidePrices) && (
+              <p className="mt-1 flex justify-between gap-2 text-xs">
+                <span className="truncate text-gray-500">{caption ? caption(card) : ""}</span>
+                {!hidePrices && (
+                  <span
+                    className={`whitespace-nowrap font-semibold ${
+                      isValuable(card) ? "text-yellow-500" : "text-green-500"
+                    }`}
+                  >
+                    {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
+                  </span>
+                )}
+              </p>
+            )}
           </button>
         ))}
       </div>
@@ -127,13 +132,15 @@ export default function CardTiles({ cards, view, onOpen, caption }: Props) {
             </td>
             <td className="w-16 whitespace-nowrap py-1 text-gray-500">MV {card.mana_value ?? 0}</td>
             <td className="w-14 py-1 uppercase text-gray-500">{card.set_code}</td>
-            <td
-              className={`w-20 whitespace-nowrap py-1 pr-3 text-right ${
-                isValuable(card) ? "font-bold text-yellow-500" : "text-green-500"
-              }`}
-            >
-              {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
-            </td>
+            {!hidePrices && (
+              <td
+                className={`w-20 whitespace-nowrap py-1 pr-3 text-right ${
+                  isValuable(card) ? "font-bold text-yellow-500" : "text-green-500"
+                }`}
+              >
+                {priceOf(card) > 0 ? money(priceOf(card)) : "—"}
+              </td>
+            )}
             {caption && <td className="w-32 truncate py-1 text-right text-gray-500">{caption(card)}</td>}
           </tr>
         ))}
