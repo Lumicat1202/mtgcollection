@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import { getUserAndClient } from "@/lib/supabase-server";
+import { type Location, groupOf, placementLabel, rowFor } from "@/lib/box-layout";
 
 // Deck building can take a while, so allow up to 5 minutes
 export const maxDuration = 300;
@@ -13,6 +14,7 @@ const SCRYFALL_HEADERS = {
 type OwnedCard = {
   name: string;
   box: string;
+  colors: string[] | null;
   type_line: string | null;
   mana_value: number | null;
   oracle_text: string | null;
@@ -52,7 +54,7 @@ export async function POST(request: Request) {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase
       .from("cards")
-      .select("name, box, type_line, mana_value, oracle_text")
+      .select("name, box, colors, type_line, mana_value, oracle_text")
       .eq("user_id", user.id)
       .containedBy("color_identity", identity)
       .order("id")
@@ -63,13 +65,25 @@ export async function POST(request: Request) {
     if (data.length < 1000) break;
   }
 
-  // 3. One entry per card name, remembering every box it's in
-  const byName = new Map<string, { card: OwnedCard; boxes: Set<string> }>();
+  // 3. Your boxes, so we can say exactly where each card is
+  const { data: locationRows } = await supabase
+    .from("locations")
+    .select("id, name, kind, rows")
+    .eq("user_id", user.id);
+  const locationByName = new Map(((locationRows ?? []) as Location[]).map((l) => [l.name, l]));
+
+  function spotLabel(card: OwnedCard) {
+    const location = locationByName.get(card.box);
+    return rowFor(groupOf(card), location) ? `${card.box} · ${placementLabel(card, location)}` : card.box;
+  }
+
+  // 4. One entry per card name, remembering every spot it's in
+  const byName = new Map<string, { card: OwnedCard; spots: Set<string> }>();
   for (const card of owned) {
     if (card.name === cmd.name) continue;
     const entry = byName.get(card.name);
-    if (entry) entry.boxes.add(card.box);
-    else byName.set(card.name, { card, boxes: new Set([card.box]) });
+    if (entry) entry.spots.add(spotLabel(card));
+    else byName.set(card.name, { card, spots: new Set([spotLabel(card)]) });
   }
   if (byName.size === 0) {
     return NextResponse.json(
@@ -78,7 +92,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // 4. No API key yet? Stop here, but report what was found
+  // 5. No API key yet? Stop here, but report what was found
   if (!process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(
       {
@@ -95,7 +109,7 @@ export async function POST(request: Request) {
     })
     .join("\n");
 
-  // 5. Ask Claude to build the deck
+  // 6. Ask Claude to build the deck
   const prompt = `Build a Commander deck for this commander:
 ${cmd.name} - ${cmd.type_line}
 ${cmdText}
@@ -137,14 +151,24 @@ ${cardList}`;
     return NextResponse.json({ error: `Deck building failed: ${msg}` }, { status: 500 });
   }
 
-  // 6. Keep only cards you really own, no duplicates, and attach box locations
+  // 7. Keep only cards you really own, no duplicates, and attach exact spots
   const seen = new Set<string>();
   const categories = (deck.categories ?? [])
     .map((cat) => ({
       name: cat.name,
       cards: (cat.cards ?? [])
         .filter((name) => byName.has(name) && !seen.has(name) && seen.add(name))
-        .map((name) => ({ name, boxes: Array.from(byName.get(name)!.boxes) })),
+        .map((name) => {
+          const { card, spots } = byName.get(name)!;
+          return {
+            name,
+            box: card.box,
+            spots: Array.from(spots),
+            colors: card.colors ?? [],
+            type_line: card.type_line,
+            mana_value: card.mana_value,
+          };
+        }),
     }))
     .filter((cat) => cat.cards.length > 0);
 

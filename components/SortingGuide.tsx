@@ -19,9 +19,28 @@ type Props = {
   onToggle: (key: string) => void;
   onSetMany: (keys: string[], done: boolean) => void;
   onClear: () => void;
+  // "file" = putting new cards away, "pull" = taking deck cards out
+  mode?: "file" | "pull";
 };
 
-// Lists freshly imported cards in the exact order of your box, with checkboxes
+const WORDS = {
+  file: {
+    title: "Sorting guide",
+    progress: "filed",
+    markAll: "Mark all filed",
+    done: "All filed! 🎉",
+    clear: "Clear guide",
+  },
+  pull: {
+    title: "Pull list",
+    progress: "pulled",
+    markAll: "Mark all pulled",
+    done: "All pulled! Time to sleeve up. 🎉",
+    clear: "Reset checkmarks",
+  },
+};
+
+// Lists cards in the exact order of your box, with checkboxes
 export default function SortingGuide({
   boxName,
   location,
@@ -31,7 +50,9 @@ export default function SortingGuide({
   onToggle,
   onSetMany,
   onClear,
+  mode = "file",
 }: Props) {
+  const words = WORDS[mode];
   const checkedSet = useMemo(() => new Set(checked), [checked]);
   const view = useMemo(
     () => (location?.kind === "box" ? buildBoxView(cards, location) : null),
@@ -75,7 +96,7 @@ export default function SortingGuide({
         <div className="mb-1 flex items-center justify-between gap-2">
           {title ? <h4 className="text-sm font-semibold text-gray-500">{title}</h4> : <span />}
           <button onClick={() => onSetMany(keys, !allDone)} className="text-xs text-blue-400 hover:underline">
-            {allDone ? "Undo" : "Mark all filed"}
+            {allDone ? "Undo" : words.markAll}
           </button>
         </div>
         <ul>{list.map(renderCard)}</ul>
@@ -87,13 +108,15 @@ export default function SortingGuide({
     <section className="mt-8 rounded-lg border border-gray-400/40 p-4">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold">Sorting guide: {boxName}</h2>
+          <h2 className="text-xl font-bold">
+            {words.title}: {boxName}
+          </h2>
           <p className="text-sm text-gray-500">
-            {doneCopies} of {totalCopies} cards filed
+            {doneCopies} of {totalCopies} cards {words.progress}
           </p>
         </div>
         <button onClick={onClear} className="text-sm text-gray-500 hover:text-gray-300">
-          Clear guide
+          {words.clear}
         </button>
       </div>
 
@@ -132,9 +155,7 @@ export default function SortingGuide({
         </>
       )}
 
-      {totalCopies > 0 && percent === 100 && (
-        <p className="mt-2 font-semibold text-green-500">All filed! 🎉</p>
-      )}
+      {totalCopies > 0 && percent === 100 && <p className="mt-2 font-semibold text-green-500">{words.done}</p>}
     </section>
   );
 }
