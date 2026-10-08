@@ -32,6 +32,9 @@ type Guide = {
 // The latest sorting guide is saved on this device so you can file later
 const GUIDE_KEY = "mtg-sorting-guide";
 
+// What a valid Scryfall ID looks like
+const SCRYFALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
@@ -105,33 +108,52 @@ export default function ImportPage() {
     setFileKey((k) => k + 1);
   }
 
-  function handleFile(e: ChangeEvent<HTMLInputElement>) {
+  // Reads a ManaBox CSV. Some files use curly quotes or extra spaces around names
+  // with commas (like "Baxter, Fly in the Ointment"), which splits the name in two,
+  // so those get cleaned up first.
+  async function handleFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
     setStatus(null);
     setValuable(null);
 
-    Papa.parse<Record<string, string>>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (result) => {
-        const parsed = result.data
-          .filter((r) => r["Scryfall ID"])
-          .map((r) => ({
-            name: r["Name"],
-            set: r["Set code"],
+    try {
+      const text = (await file.text())
+        .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+        .replace(/(^|,)[ \t]+"/gm, '$1"');
+
+      const result = Papa.parse<Record<string, string>>(text, {
+        header: true,
+        skipEmptyLines: true,
+        transformHeader: (h) => h.trim(),
+      });
+
+      const parsed = result.data
+        .map((r) => {
+          // Use the Scryfall ID column, or find an ID anywhere in the row if columns got shifted
+          const fromColumn = String(r["Scryfall ID"] ?? "").trim();
+          const anywhere = Object.values(r)
+            .flat()
+            .map((v) => String(v ?? "").trim())
+            .find((v) => SCRYFALL_ID.test(v));
+          return {
+            name: String(r["Name"] ?? "").trim(),
+            set: String(r["Set code"] ?? "").trim(),
             quantity: Number(r["Quantity"]) || 1,
             foil: r["Foil"] === "foil" || r["Foil"] === "etched",
-            scryfall_id: r["Scryfall ID"],
-          }));
-        if (parsed.length === 0) {
-          setStatus({ type: "error", text: "Couldn't find any cards. Is this a ManaBox CSV export?" });
-        }
-        setRows(parsed);
-      },
-      error: (err) => setStatus({ type: "error", text: err.message }),
-    });
+            scryfall_id: SCRYFALL_ID.test(fromColumn) ? fromColumn : anywhere ?? "",
+          };
+        })
+        .filter((r) => r.scryfall_id);
+
+      if (parsed.length === 0) {
+        setStatus({ type: "error", text: "Couldn't find any cards. Is this a ManaBox CSV export?" });
+      }
+      setRows(parsed);
+    } catch (err) {
+      setStatus({ type: "error", text: err instanceof Error ? err.message : "Couldn't read that file" });
+    }
   }
 
   function requestBody() {
